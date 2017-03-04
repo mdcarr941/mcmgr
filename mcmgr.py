@@ -1,9 +1,4 @@
 #!/usr/bin/python3
-WORLDS_DIR = os.path.join(os.environ['HOME'], 'worlds')
-MCSERVER = os.path.join(os.environ['HOME'], 'mcservers', 'minecraft_server.jar')
-MEMSTART = '256M'
-MEMMAX = '1G'
-LOGFILE = 'mcmgr.log'
 
 import sys
 import os
@@ -17,10 +12,149 @@ import logging
 import curses
 from curses import ascii
 
-logging.basicConfig(filename=LOGFILE, level=logging.INFO)
+WORLDS_DIR = os.path.join(os.environ['HOME'], 'worlds')
+MCSERVER = os.path.join(os.environ['HOME'], 'mcservers', 'minecraft_server.jar')
+MEMSTART = '256M'
+MEMMAX = '1G'
+LOGFILE = 'mcmgr.log'
+
+logging.basicConfig(filename=LOGFILE, level=logging.DEBUG)
+
+
 
 class StopLogException(Exception):
+  """Exception thrown by a LineParser to signal a Log to stop."""
   pass
+
+
+
+class LineParser():
+  """Parse the lines written to a Log."""
+  public_methods = ['admonish', 'randint', 'tell_time']
+
+
+  def randint(self, *args, **kwargs):
+    """Generate a random integer N such that 1 <= N <= b."""
+    b = args[0] 
+    cmd = '/say '
+    try:
+      b = int(b)
+      cmd += str(random.randint(1, b))
+    except ValueError:
+      cmd += 'ValueError: expected an integer'
+    return cmd
+
+
+  def admonish(self, *args, **kwargs):
+    target = args[0]
+    try:
+      player_name = kwargs['player_name']
+    except KeyError:
+      return
+    logging.debug('got player_name = ' + str(player_name))
+    if player_name == 'tacshell':
+      return '/say ' + target + ', don\'t derp it up'
+    else:
+      return '/say You can\'t tell me what to do!'
+
+
+  def tell_time(self, *args, **kwargs):
+    return '/say ' + kwargs['time']
+
+
+  def __init__(self):
+    random.seed()
+    return
+
+
+  def tokenize(self, line, lws=' \t', delims='[]'):
+    ld = delims[0]
+    rd = delims[1]
+    line = line.lstrip().rstrip()
+
+    delim_flag = False
+    tokens = []
+    start = -1
+    for n in range(len(line)):
+      c = line[n]
+      if delim_flag:
+        if c != rd:
+          continue
+        elif n > start:
+          tokens.append(line[start:n])
+          delim_flag = False
+          start = -1
+          continue
+      if start < 0 and c == ld:
+        start = n + 1
+        delim_flag = True
+        continue
+      if start < 0 and c not in lws:
+        start = n
+        continue
+      if start >= 0 and c in lws:
+        if n > start:
+          tokens.append(line[start:n])
+        start = -1
+    if start >= 0:
+      tokens.append(line[start:])
+    return tokens
+
+
+  def delim_extract(self, token, delims='[]'):
+    left_delim = delims[0]
+    right_delim = delims[1]
+
+    lp = token.find(left_delim)
+    if lp == -1:
+      return None
+
+    rp = token.find(right_delim, lp)
+    if rp <= lp:
+      rp = None
+    return token[lp + 1:rp]
+
+
+  def mutator(self, line):
+    return line
+
+
+  def parse(self, line):
+    """Tokenize a line, extract metadata, and pass on the remainding tokens
+       to another method."""
+
+    tokens = self.tokenize(line)
+    if len(tokens) > 0:
+      logging.debug('have tokens: ' + str(tokens))
+
+    meta = dict()
+    meta['time'] = tokens[0]
+    meta['tag'] = tokens[1]
+
+    if len(tokens) < 2:
+      return
+
+    meta['server_flag'] = False
+    meta['player_name'] = self.delim_extract(tokens[3], delims='<>')
+    if meta['player_name'] == None and tokens[3] == 'Server':
+      meta['player_name'] = 'Server'
+      meta['server_flag'] = True
+
+    token = tokens[4]
+    logging.debug('tokens to be passed on: ' + str(tokens[5:]))
+    if token in self.public_methods:
+      method = self.__getattribute__(token)
+      try:
+        logging.debug('calling: ' + token)
+        return method(*tokens[5:], **meta) + '\n'
+      except StopLogException as e:
+        raise e
+      except Exception as e:
+        logging.error('Uncaught exception in called method.')
+        logging.debug(str(e))
+        return None
+
+
 
 class Log(threading.Thread):
   """A class containing the lines output by a subprocess."""
@@ -32,15 +166,9 @@ class Log(threading.Thread):
   log_len = 4096
   line_parser = None
   read_wait = 0.1
-
-  # A selector object used to do asynchronous IO.
-  selector = None
-  # Should read_pos be advanced?
   advance_flag = False
-  log = [None]
   write_pos = 0
   read_pos = 0
-  running = False
 
 
   def __init__(self, name=None, **kwargs):
@@ -53,12 +181,62 @@ class Log(threading.Thread):
     if self.line_parser == None:
       self.line_parser = LineParser()
 
-    if len(self.log) == 1:
+    if 'log' not in dir(self):
+      self.log = [None]
       self.log *= self.log_len
     if len(self.log) != self.log_len:
       raise Exception('Invalid arguments: log_len != len(log)')
 
+    self.running = False
     return
+
+
+  def start(self, read_stream=None, write_stream=None, ctrl_stream=None):
+    if read_stream != None:
+      self.read_stream = read_stream
+    if write_stream != None:
+      self.write_stream = write_stream
+    if ctrl_stream != None:
+      self.ctrl_stream = ctrl_stream
+    self.running = True
+
+    super(Log, self).start()
+    return
+
+
+  def run(self):
+    logging.debug('entering Log.run')
+    while self.running and not self.read_stream.closed:
+      try:
+        rlist, _, _ = select.select([self.read_stream], [], [], self.read_wait)
+        for fileobj in rlist:
+          line = fileobj.readline()
+          if len(line) == 0:
+            self.running = False
+            break
+          self.write(line)
+      except OSError or ValueError:
+        break
+    self.running = False
+    logging.debug('exiting Log.run')
+    return
+
+
+  def stop(self):
+    self.running = False
+    return
+
+
+  def __iter__(self):
+    return self
+
+
+  def __next__(self):
+    if self.read_pos == self.write_pos:
+      raise StopIteration
+    out = self.log[self.read_pos]
+    self.read_pos = (self.read_pos + 1) % self.log_len
+    return out
 
 
   def write(self, line):
@@ -73,14 +251,19 @@ class Log(threading.Thread):
       self.stop()
       return
 
+    self.log[self.write_pos] = line
+    self.advance_write()
+
     if message != None and self.ctrl_stream != None\
                        and not self.ctrl_stream.closed:
       self.ctrl_stream.write(str(message))
 
     if self.write_stream != None and not self.write_stream.closed:
       self.write_stream.write(line)
+    return
 
-    self.log[self.write_pos] = line
+
+  def advance_write(self):
     self.write_pos = (self.write_pos + 1) % self.log_len
 
     if self.advance_flag:
@@ -132,52 +315,19 @@ class Log(threading.Thread):
     return
 
 
-  def start(self, read_stream=None, write_stream=None, ctrl_stream=None):
-    if read_stream != None:
-      self.read_stream = read_stream
-    if write_stream != None:
-      self.write_stream = write_stream
-    if ctrl_stream != None:
-      self.ctrl_stream = ctrl_stream
-    self.running = True
-
-    super(Log, self).start()
-    return
+  def go_forwards(self, start=self.read_pos):
+    end = self.write_pos
+    while n != end:
+      yield self.log[n]
+      n = (n + 1) % self.log_len
 
 
-  def run(self):
-    logging.debug('entering Log.run')
-    while self.running and not self.read_stream.closed:
-      try:
-        rlist, _, _ = select.select([self.read_stream], [], [], self.read_wait)
-        for fileobj in rlist:
-          line = fileobj.readline()
-          if len(line) == 0:
-            self.running = False
-            break
-          self.write(line)
-      except OSError or ValueError:
-        break
-    self.running = False
-    logging.debug('exiting Log.run')
-    return
-
-
-  def stop(self):
-    self.running = False
-    return
-
-
-  def __iter__(self):
-    return self
-
-
-  def __next__(self):
-    if self.read_pos == self.write_pos:
-      raise StopIteration
-    out = self.log[self.read_pos]
-    self.read_pos = (self.read_pos + 1) % self.log_len
-    return out
+  def go_backwards(self):
+    end = self.write_pos
+    n = (self.write_pos - 1) % self.log_len
+    while n != end:
+      yield self.log[n]
+      n = (n - 1) % self.log_len
 
 
   def get_oldest_index(self):
@@ -240,13 +390,6 @@ class Log(threading.Thread):
     return lines
 
 
-  def go_backwards(self):
-    n = self.write_pos - 1
-    while True:
-      yield self.log[n]
-      n = (n-1) % self.log_len
-
-
   def list_recent_lines(self, n):
     """Get the n most recent lines in the log, in order of newest to oldest.
        If there are fewer than n lines, return them all."""
@@ -256,75 +399,6 @@ class Log(threading.Thread):
       if len(lines) == n:
         break;
     return lines
-
-
-
-class LineParser():
-
-  def __init__(self):
-    random.seed()
-    return
-
-
-  def mutator(self, line):
-    return line
-
-
-  def parse(self, line):
-    """Extract player_name and pass on the remainder of the line 
-       to another method."""
-    lb = rb = n = 0
-    for n in range(len(line)):
-      c = line[n]
-      if c == '[':
-        lb += 1
-      elif c == ']':
-        rb += 1
-      if lb == 2 and rb == 2:
-        break
-
-    tokens = line[n+2:].lstrip().split()
-    if len(tokens) > 0:
-      logging.debug('tokens = ' + str(tokens))
-      
-    if len(tokens) < 2:
-      return
-
-    char = tokens[0][0]
-    if char == '<' or char == '[':
-      char2 = chr(ord(char)+2)
-      player_name = tokens[0].lstrip(char).rstrip(char2)
-    else:
-      return
-
-    if tokens[1] in dir(self):
-      method = self.__getattribute__(tokens[1])
-      return method(*tokens[2:], player_name=player_name) + '\n'
-
-
-  def say_randint(self, *args, **kwargs):
-    """Generate a random integer N such that 1 <= N <= b."""
-    b = args[0] 
-    cmd = '/say '
-    try:
-      b = int(b)
-      cmd += str(random.randint(1, b))
-    except ValueError:
-      cmd += 'ValueError: expected an integer'
-    return cmd
-
-
-  def admonish(self,*args, **kwargs):
-    target = args[0]
-    try:
-      player_name = kwargs['player_name']
-    except KeyError:
-      return
-    logging.debug('got player_name = ' + str(player_name))
-    if player_name == 'tacshell':
-      return '/say ' + target + ', quit being a NOOB!'
-    else:
-      return '/say You can\'t tell me what to do!'
 
 
 
