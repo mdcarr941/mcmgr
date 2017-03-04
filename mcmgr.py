@@ -291,7 +291,8 @@ class LineParser():
 
     char = tokens[0][0]
     if char == '<' or char == '[':
-      player_name = tokens[0].strip(char)
+      char2 = chr(ord(char)+2)
+      player_name = tokens[0].lstrip(char).rstrip(char2)
     else:
       return
 
@@ -310,6 +311,19 @@ class LineParser():
     except ValueError:
       cmd += 'ValueError: expected an integer'
     return cmd
+
+
+  def admonish(self,*args, **kwargs):
+    target = args[0]
+    try:
+      player_name = kwargs['player_name']
+    except KeyError:
+      return
+    logging.debug('got player_name = ' + str(player_name))
+    if player_name == 'tacshell':
+      return '/say ' + target + ', quit being a NOOB!'
+    else:
+      return '/say You can\'t tell me what to do!'
 
 
 
