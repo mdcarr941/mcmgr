@@ -96,6 +96,12 @@ class Log(threading.Thread):
     return
 
 
+  def most_recent_read(self):
+    """Set read_pos to the most recent line in the log."""
+    self.read_pos = (self.write_pos - 1) % self.log_len
+    return
+
+
   def rewind_read(self):
     """Move read_pos backwards, whilst keeping it ahead of write_pos."""
     prev = (self.read_pos - 1) % self.log_len
@@ -140,16 +146,20 @@ class Log(threading.Thread):
 
 
   def run(self):
-    while self.running:
-      if self.read_stream.closed:
-        break
+    logging.debug('entering Log.run')
+    while self.running and not self.read_stream.closed:
       try:
         rlist, _, _ = select.select([self.read_stream], [], [], self.read_wait)
         for fileobj in rlist:
-          self.write(fileobj.readline())
+          line = fileobj.readline()
+          if len(line) == 0:
+            self.running = False
+            break
+          self.write(line)
       except OSError or ValueError:
         break
     self.running = False
+    logging.debug('exiting Log.run')
     return
 
 
@@ -333,6 +343,7 @@ class Server(threading.Thread):
   address = ""
   timeout = .05
   running = False
+  returncode = None
   
   def __init__(self, world, line_parser=None, **kwargs):
     if type(world) != type(str()):
@@ -444,7 +455,8 @@ class Server(threading.Thread):
 
     output = ''.join(self.log.list_all_lines())
     connection.sendall(bytes(output, 'utf-8'))
-    while self.running:
+    error = False
+    while self.returncode == None:
       try:
         output = ''.join(self.log.list_newlines())
         connection.sendall(bytes(output, 'utf-8'))
@@ -456,11 +468,18 @@ class Server(threading.Thread):
           continue
         except OSError:
           # connection is closed
+          error = True
           break
       except BrokenPipeError:
         # connection is closed
+        error = True
         break
 
+    if not error:
+      try:
+        connection.sendall(bytes('The server has shut down.', 'utf-8'))
+      except OSError or BrokenPipeError:
+        pass
     logging.debug('shell_server is returning')
     return
 
@@ -561,7 +580,7 @@ class Shell(Log):
 
   def write(self, line):
     super(Shell, self).write(line)
-    self.set_read_pos()
+    self.most_recent_read()
     self.draw_screen()
     return
 
@@ -650,12 +669,6 @@ class Shell(Log):
     return
 
 
-  def set_read_pos(self):
-    """Show the most recent lines in the log."""
-    self.read_pos = (self.write_pos - 1) % self.log_len
-    return
-
-
   def check_startx(self):
     if self.cursor_pos < self.start_x:
       self.start_x = self.cursor_pos
@@ -682,23 +695,6 @@ class Shell(Log):
   def set_cursor(self, n):
     self.cursor_pos = n
     self.check_cursor()
-    return
-
-
-  def run(self):
-    logging.debug('entering Shell.run')
-    buff = ''
-    while self.running:
-      try:
-        buff += self.sock.recv(4096).decode()
-        line, _, buff = buff.partition('\n')
-        self.write(line)
-      except socket.timeout:
-        continue
-      except OSError or ValueError:
-        break
-    self.running = False
-    logging.debug('exiting Shell.run')
     return
 
 
@@ -729,14 +725,6 @@ class Shell(Log):
         c = self.stdscr.getch()
         if c == ascii.EOT:
           break
-        elif c == curses.KEY_F1:
-          self.stdscr.keypad(False)
-          curses.echo()
-          curses.nocbreak()
-          curses.endwin()
-          self.stop()
-          self.sock.close()
-          import pdb; pdb.set_trace()
         elif c == curses.KEY_RESIZE:
           self.update_size()
         elif c == curses.KEY_UP:
@@ -780,7 +768,6 @@ class Shell(Log):
           self.buff = ''
           self.set_cursor(0)
         else:
-          #self.buff = 'got: ' + str(c)
           curses.beep()
           curses.flash()
         self.draw_screen()
