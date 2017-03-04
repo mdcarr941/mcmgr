@@ -16,7 +16,7 @@ MCSERVER = os.path.join(os.environ['HOME'], 'mcservers', 'minecraft_server.jar')
 MEMSTART = '256M'
 MEMMAX = '1G'
 
-logging.basicConfig(filename='mcmgr.log', level=logging.DEBUG)
+logging.basicConfig(filename='mcmgr.log', level=logging.INFO)
 
 class StopLogException(Exception):
   pass
