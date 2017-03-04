@@ -1,4 +1,10 @@
 #!/usr/bin/python3
+WORLDS_DIR = os.path.join(os.environ['HOME'], 'worlds')
+MCSERVER = os.path.join(os.environ['HOME'], 'mcservers', 'minecraft_server.jar')
+MEMSTART = '256M'
+MEMMAX = '1G'
+LOGFILE = 'mcmgr.log'
+
 import sys
 import os
 import subprocess
@@ -11,12 +17,7 @@ import logging
 import curses
 from curses import ascii
 
-WORLDS_DIR = os.path.join(os.environ['HOME'], 'worlds')
-MCSERVER = os.path.join(os.environ['HOME'], 'mcservers', 'minecraft_server.jar')
-MEMSTART = '256M'
-MEMMAX = '1G'
-
-logging.basicConfig(filename='mcmgr.log', level=logging.INFO)
+logging.basicConfig(filename=LOGFILE, level=logging.INFO)
 
 class StopLogException(Exception):
   pass
