@@ -315,10 +315,13 @@ class Log(threading.Thread):
     return
 
 
-  def go_forwards(self, start=self.read_pos):
+  def go_forwards(self, start=None):
+    if start == None:
+      start = self.read_pos
     end = self.write_pos
+    n = start
     while n != end:
-      yield self.log[n]
+      yield n
       n = (n + 1) % self.log_len
 
 
