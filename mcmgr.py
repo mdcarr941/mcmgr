@@ -5,7 +5,6 @@ import subprocess
 import time
 import socket
 import threading
-import shutil
 import select
 import random
 import logging
@@ -17,7 +16,7 @@ MCSERVER = os.path.join(os.environ['HOME'], 'mcservers', 'minecraft_server.jar')
 MEMSTART = '256M'
 MEMMAX = '1G'
 
-#logging.basicConfig(filename='mcmgr.log', level=logging.DEBUG)
+logging.basicConfig(filename='mcmgr.log', level=logging.DEBUG)
 
 class StopLogException(Exception):
   pass
@@ -284,8 +283,8 @@ class LineParser():
         break
 
     tokens = line[n+2:].lstrip().split()
-    #if len(tokens) > 0:
-    #  logging.debug('tokens = ' + str(tokens))
+    if len(tokens) > 0:
+      logging.debug('tokens = ' + str(tokens))
       
     if len(tokens) < 2:
       return
@@ -804,7 +803,6 @@ if __name__ == '__main__':
   elif sys.argv[1] == 'shell':
     server = Server(sys.argv[2])
     shell = server.shell_client()
-    logging.basicConfig(filename='mcmgr-shell.log', level=logging.DEBUG)
     try:
       shell.start()
     except KeyboardInterrupt:
