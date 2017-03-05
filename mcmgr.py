@@ -11,13 +11,18 @@ import logging
 import curses
 from curses import ascii
 
+try:
+  import bearing
+except ImportError:
+  pass
+
 WORLDS_DIR = os.path.join(os.environ['HOME'], 'worlds')
 MCSERVER = os.path.join(os.environ['HOME'], 'mcservers', 'minecraft_server.jar')
 MEMSTART = '256M'
 MEMMAX = '1G'
 LOGFILE = 'mcmgr.log'
 
-logging.basicConfig(filename=LOGFILE, level=logging.DEBUG)
+logging.basicConfig(filename=LOGFILE, level=logging.INFO)
 
 
 
@@ -29,8 +34,38 @@ class StopLogException(Exception):
 
 class LineParser():
   """Parse the lines written to a Log."""
-  public_methods = ['admonish', 'randint', 'tell_time']
+  public_methods = ['bearing', 'admonish', 'randint', 'tell_time']
 
+
+  def bearing(self, *args, **kwargs):
+    """Get the direction needed to travel between two points."""
+    try:
+      bearing.bearing((0,0), (0,0))
+    except NameError:
+      return
+
+    def get_args(args):
+      if len(args) == 0:
+        return None
+      P = None
+      try:
+        P = bearing.places[args[0]]
+        args = args[1:]
+      except KeyError:
+        try:
+          P = (int(args[0]), int(args[1]))
+          args = args[2:]
+        except IndexError or ValueError:
+          pass
+      return P, args
+
+    A, args = get_args(args)
+    B, args = get_args(args)
+    if A == None or B == None:
+      return None
+    else:
+      return '/say ' + str(round(bearing.bearing(A, B), 2))
+      
 
   def randint(self, *args, **kwargs):
     """Generate a random integer N such that 1 <= N <= b."""
@@ -52,7 +87,7 @@ class LineParser():
       return
     logging.debug('got player_name = ' + str(player_name))
     if player_name == 'tacshell':
-      return '/say ' + target + ', don\'t derp it up'
+      return '/say ' + target + ', did you really think that would work?'
     else:
       return '/say You can\'t tell me what to do!'
 
