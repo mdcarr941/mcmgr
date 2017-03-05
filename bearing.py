@@ -2,15 +2,9 @@
 
 from math import pi, atan
 
+# Places you add here will be referrable by name.
 places = {
-  'base': (309,110),
-  'desert_village': (2733,-3011),
-  'underwater_city': (2944,-2383),
-  'western_annex': (-624,187),
-  'plains_village': (-1496,-698),
-  'end_portal1': (1057, -13),
-  'end_portal2': (992,462),
-  'joshs_village': (116,1286),
+  'origin': (0,0),
 }
 
 def bearing(A,B):

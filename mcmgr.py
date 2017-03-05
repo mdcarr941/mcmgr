@@ -86,7 +86,7 @@ class LineParser():
     except KeyError:
       return
     logging.debug('got player_name = ' + str(player_name))
-    if player_name == 'tacshell':
+    if player_name == 'Server':
       return '/say ' + target + ', did you really think that would work?'
     else:
       return '/say You can\'t tell me what to do!'
