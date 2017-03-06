@@ -2,15 +2,15 @@
 
 import sys
 import os
-import subprocess
 import socket
-import threading
-import select
 import random
 import logging
 import curses
 from curses import ascii
+import signal
+import json
 
+import lineharness
 try:
   import bearing
 except ImportError:
@@ -22,61 +22,161 @@ MEMSTART = '256M'
 MEMMAX = '1G'
 LOGFILE = 'mcmgr.log'
 
-logging.basicConfig(filename=LOGFILE, level=logging.INFO)
+logging.basicConfig(filename=LOGFILE, level=logging.DEBUG)
 
 
 
-class StopLogException(Exception):
-  """Exception thrown by a LineParser to signal a Log to stop."""
-  pass
+class MCLineParser(lineharness.LineParser):
+  public_methods = ['bearing', 'save_coords', 'list_coords', 'del_coords',\
+                    'admonish', 'randint', 'tell_time']
 
 
+  def __init__(self, cwd=None):
+    random.seed()
 
-class LineParser():
-  """Parse the lines written to a Log."""
-  public_methods = ['bearing', 'admonish', 'randint', 'tell_time']
+    self.places = dict()
+    if cwd != None:
+      self.places_file = os.path.join(cwd, 'places.json')
+      try:
+        with open(self.places_file, 'r') as fp:
+          self.places = json.loads(fp.read())
+      except FileNotFoundError as e:
+        logging.error('could not find places.json in cwd: ' + cwd)
+        logging.debug(str(e))
+      except json.decoder.JSONDecodeError as e:
+        logging.error('problem decoding: ' + cwd + '/places.json')
+        logging.debug(str(e))
+    if '__global__' not in self.places:
+      self.places['__global__'] = dict()
+    return
+
+
+  def say(self, *args, **kwargs):
+    cmd = '/say '
+    try:
+      cmd += args[0]
+    except IndexError:
+      pass
+    return cmd
+
+
+  def invalid_args(self, *args, **kwargs):
+    msg = 'Invalid arguments. '
+    try:
+      msg += args[0]
+    except IndexError:
+      pass
+    return self.say(msg)
+
+
+  def save_coords(self, *args, **kwargs):
+    """Save coordinates <x> and <z> as <name>. Usage: save_coords <name> <x> <z>"""
+    if kwargs['server_flag']:
+      player_name = '__global__'
+    else:
+      player_name = kwargs['player_name']
+
+    try:
+      player_places = self.places[player_name]
+    except KeyError:
+      player_places = dict()
+
+    try:
+      player_places[args[0]] = [int(args[1]), int(args[2])]
+    except (IndexError, ValueError):
+      return self.invalid_args(self.save_coords.__doc__)
+
+    try:
+      with open(self.places_file, 'w') as fp:
+        fp.write(json.dumps(self.places))
+    except NameError:
+      # self.places_file was not defined in init, not a problem
+      pass
+    except FileNotFoundError as e:
+      logging.error('Error saving file: ' + self.places_file)
+      logging.debug(e)
+
+    return self.say('(%s, %s) saved as %s' % (args[1], args[2], args[0]))
+
+
+  def list_coords(self, *args, **kwargs):
+    """List all coordinates usable by a player. Usage: list_coords"""
+
+    def make_list(places):
+      str_list = []
+      for key, val in places.items():
+        str_list.append('%s = (%d, %d)' % (key, val[0], val[1]))
+      return str_list
+      
+    str_list = make_list(self.places['__global__'])
+    try:
+      str_list += make_list(self.places[kwargs['player_name']])
+    except KeyError:
+      pass
+    if len(str_list) > 0:
+      return self.say('\n/say '.join(str_list))
+    else:
+      return self.say('no saved coordinates')
+
+
+  def del_coords(self, *args, **kwargs):
+    """Delete the coordinates known by <name>. Usage: del_coords <name>"""
+    if kwargs['server_flag']:
+      player_name = '__global__'
+    else:
+      player_name = kwargs['player_name']
+    try:
+      del self.places[player_name][args[0]]
+    except (KeyError, IndexError):
+      return self.say('No coordinates with that name.')
+    return self.say('%s deleted successfully.' % args[0])
 
 
   def bearing(self, *args, **kwargs):
-    """Get the direction needed to travel between two points."""
+    """Get the direction needed to travel between two points. Points \
+can be referred to by name or by their X and Z coordinates. Usage: \
+bearing <x1 z1|name1> <x2 z2|name2>"""
     try:
       bearing.bearing((0,0), (0,0))
     except NameError:
       return
 
     def get_args(args):
-      if len(args) == 0:
-        return None
       P = None
       try:
-        P = bearing.places[args[0]]
+        P = self.places['__global__'][args[0]]
         args = args[1:]
+      except IndexError:
+        return None, args
       except KeyError:
         try:
-          P = (int(args[0]), int(args[1]))
-          args = args[2:]
-        except IndexError or ValueError:
-          pass
+          P = self.places[kwargs['player_name']][args[0]]
+          args = args[1:]
+        except KeyError:
+          try:
+            P = (int(args[0]), int(args[1]))
+            args = args[2:]
+          except (ValueError, IndexError):
+            pass
       return P, args
 
     A, args = get_args(args)
     B, args = get_args(args)
     if A == None or B == None:
-      return None
+      return self.invalid_args(self.bearing.__doc__)
     else:
-      return '/say ' + str(round(bearing.bearing(A, B), 2))
+      return self.say(str(round(bearing.bearing(A, B), 2)))
       
 
   def randint(self, *args, **kwargs):
     """Generate a random integer N such that 1 <= N <= b."""
     b = args[0] 
-    cmd = '/say '
     try:
       b = int(b)
-      cmd += str(random.randint(1, b))
+      cmd = str(random.randint(1, b))
     except ValueError:
-      cmd += 'ValueError: expected an integer'
-    return cmd
+      cmd = 'ValueError: expected an integer'
+    return self.say(cmd)
 
 
   def admonish(self, *args, **kwargs):
@@ -87,18 +187,13 @@ class LineParser():
       return
     logging.debug('got player_name = ' + str(player_name))
     if player_name == 'Server':
-      return '/say ' + target + ', did you really think that would work?'
+      return self.say(target + ', did you really think that would work?')
     else:
-      return '/say You can\'t tell me what to do!'
+      return self.say('You can\'t tell me what to do!')
 
 
   def tell_time(self, *args, **kwargs):
-    return '/say ' + kwargs['time']
-
-
-  def __init__(self):
-    random.seed()
-    return
+    return self.say(kwargs['time'])
 
 
   def tokenize(self, line, lws=' \t', delims='[]'):
@@ -149,10 +244,6 @@ class LineParser():
     return token[lp + 1:rp]
 
 
-  def mutator(self, line):
-    return line
-
-
   def parse(self, line):
     """Tokenize a line, extract metadata, and pass on the remainding tokens
        to another method."""
@@ -179,8 +270,8 @@ class LineParser():
       method = self.__getattribute__(token)
       try:
         logging.debug('calling: ' + token)
-        return method(*tokens[5:], **meta) + '\n'
-      except StopLogException as e:
+        return method(*tokens[5:], **meta).rstrip() + '\n'
+      except lineharness.StopLogException as e:
         raise e
       except Exception as e:
         logging.error('Uncaught exception in called method.')
@@ -189,245 +280,7 @@ class LineParser():
 
 
 
-class Log(threading.Thread):
-  """A class containing the lines output by a subprocess."""
-  # The stream object that the log will read from.
-  read_stream = sys.stdin
-  # The stream object the log will write to.
-  write_stream = sys.stdout
-  ctrl_stream = None
-  log_len = 4096
-  line_parser = None
-  read_wait = 0.1
-  advance_flag = False
-  write_pos = 0
-  read_pos = 0
-
-
-  def __init__(self, name=None, **kwargs):
-    super(Log, self).__init__(target='daemon', name=name)
-
-    for kw in kwargs:
-      if kw in dir(self):
-        self.__setattr__(kw, kwargs[kw])
-
-    if self.line_parser == None:
-      self.line_parser = LineParser()
-
-    if 'log' not in dir(self):
-      self.log = [None]
-      self.log *= self.log_len
-    if len(self.log) != self.log_len:
-      raise Exception('Invalid arguments: log_len != len(log)')
-
-    self.running = False
-    return
-
-
-  def start(self, read_stream=None, write_stream=None, ctrl_stream=None):
-    if read_stream != None:
-      self.read_stream = read_stream
-    if write_stream != None:
-      self.write_stream = write_stream
-    if ctrl_stream != None:
-      self.ctrl_stream = ctrl_stream
-    self.running = True
-
-    super(Log, self).start()
-    return
-
-
-  def run(self):
-    logging.debug('entering Log.run')
-    while self.running and not self.read_stream.closed:
-      try:
-        rlist, _, _ = select.select([self.read_stream], [], [], self.read_wait)
-        for fileobj in rlist:
-          line = fileobj.readline()
-          if len(line) == 0:
-            self.running = False
-            break
-          self.write(line)
-      except OSError or ValueError:
-        break
-    self.running = False
-    logging.debug('exiting Log.run')
-    return
-
-
-  def stop(self):
-    self.running = False
-    return
-
-
-  def __iter__(self):
-    return self
-
-
-  def __next__(self):
-    if self.read_pos == self.write_pos:
-      raise StopIteration
-    out = self.log[self.read_pos]
-    self.read_pos = (self.read_pos + 1) % self.log_len
-    return out
-
-
-  def list_newlines(self):
-    return [line for line in self]
-
-
-  def write(self, line):
-    if line == None:
-      return
-
-    line = self.line_parser.mutator(line)
-
-    try:
-      message = self.line_parser.parse(line)
-    except StopLogException:
-      self.stop()
-      return
-
-    self.log[self.write_pos] = line
-    self.advance_write()
-
-    if message != None and self.ctrl_stream != None\
-                       and not self.ctrl_stream.closed:
-      self.ctrl_stream.write(str(message))
-
-    if self.write_stream != None and not self.write_stream.closed:
-      self.write_stream.write(line)
-    return
-
-
-  def advance_write(self):
-    self.write_pos = (self.write_pos + 1) % self.log_len
-
-    if self.advance_flag:
-      if self.write_pos == self.read_pos:
-        self.read_pos = (self.read_pos + 1) % self.log_len
-      else:
-        self.advance_flag = False
-
-    if (self.read_pos - self.write_pos) % self.log_len == 1:
-      # We're about to write past the reading pointer, so it should be advanced
-      # next time. We set a flag to indicate this.
-      self.advance_flag = True
-    return
-
-
-  def go_forward(self, start=None):
-    end = self.write_pos
-    if start == None:
-      start = self.read_pos
-    n = start
-    yield n
-    n = (n + 1) % self.log_len
-    while n != end:
-      yield n
-      n = (n + 1) % self.log_len
-
-
-  def go_backward(self, start=None):
-    end = self.write_pos
-    if start == None:
-      start = (end - 1) % self.log_len
-    n = start
-    yield n
-    n = (n - 1) % self.log_len
-    while n != end:
-      yield n
-      n = (n - 1) % self.log_len
-
-
-  def most_recent_read(self):
-    """Set read_pos to the most recent line in the log."""
-    self.read_pos = (self.write_pos - 1) % self.log_len
-    return
-
-
-  def seek_read(self, num):
-    if num < 0:
-      num = -num
-      gen = self.go_backward(start=self.read_pos)
-    else:
-      gen = self.go_forward()
-    count = 0
-    for k in gen:
-      count += 1
-      if count > num:
-        break
-    self.read_pos = k
-    return
-
-
-  def rewind_read(self):
-    self.seek_read(-1)
-    return
-
-
-  def advance_read(self):
-    self.seek_read(1)
-    return
-
-
-  def list_lines_gen(self, gen, num=None, start=None):
-    lines = []
-    for n in gen(start=start):
-      line = self.log[n]
-      if line == None:
-        break
-      lines.append(line)
-      if len(lines) == num:
-        break
-    return lines
-
-
-  def list_lines(self, num):
-    """Get n lines starting at read_pos. Function does not update read_pos. If
-       there are fewer than n lines, return them all."""
-    return self.list_lines_gen(self.go_forward, num=num)
-
-
-  def list_prev_lines(self, num):
-    """Get a list of n lines starting from read_pos and going backwards. The
-       list is ordered from most newest to oldest (so that the line pointed
-       to by read_pos is first). If there are fewer than n lines then all are
-       returned."""
-    return self.list_lines_gen(self.go_backward, num=num, start=self.read_pos)
-
-
-  def list_recent_lines(self, num):
-    """Get the num most recent lines in the log, in order of newest to oldest.
-       If there are fewer than n lines, return them all."""
-    return self.list_lines_gen(self.go_backward, num=num)
-
-
-  def get_oldest_index(self):
-    """Find the index of the oldest line in the log. This is accomplished by
-       starting ahead of the newest line and advancing until we reach an index
-       which has an entry."""
-    for k in self.go_forward(start=self.write_pos):
-      if self.log[k] != None:
-        break
-    return k
-
-
-  def list_all_lines(self):
-    """Get all lines in the log starting from the oldest. This function
-       advances read_pos."""
-    lines = self.list_lines_gen(self.go_forward, start=self.get_oldest_index())
-    self.read_pos = self.write_pos
-    return lines
-
-
-  def __str__(self):
-    lines = self.list_all_lines()
-    return ''.join(lines)
-
-
-
-class Server(threading.Thread):
+class MCServer(lineharness.Server):
   """Class representing a server's supervising thread."""
   # The name of the world the server will host.
   world = ""
@@ -439,108 +292,47 @@ class Server(threading.Thread):
   memstart = MEMSTART
   # Maximum memory for the JVM.
   memmax = MEMMAX
-  # Number of seconds to wait for subprocess to exit.
-  sub_timeout = 30
+
 
   def __init__(self, world, line_parser=None, **kwargs):
     if type(world) != type(str()):
       raise TypeError('Expected a string argument.')
     self.world = world
 
-    super(Server, self).__init__(name=self.world + '-Server')
-
-    for kw in kwargs:
-      if kw in dir(self):
-        self.__setattr__(kw, kwargs[kw])
-
     self.cwd = os.path.join(WORLDS_DIR, world)
     if not os.path.isdir(self.cwd):
       raise Exception('Not a directory: ' + self.cwd)
 
+    self.address = os.path.join(self.cwd, self.world + '.sock') 
+
+    if line_parser == None:
+      line_parser = MCLineParser(cwd=self.cwd)
+
+    super(MCServer, self).__init__(name=self.world, line_parser=line_parser,
+                                   **kwargs)
+
     if not os.path.isfile(self.mcserver):
       raise Exception('Not a file: ' + self.mcserver)
-
-    self.log = Log(name=self.world + '-Log', line_parser=line_parser)
 
     if type(self.cmd) == type(str()):
       self.cmd = [self.cmd]
     self.cmd += ['-Xms' + str(self.memstart), '-Xmx' + str(self.memmax),
                   '-jar', self.mcserver, 'nogui']
-
-    self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    self.timeout = .05
-    self.sock.settimeout(self.timeout)
-    self.address = os.path.join(self.cwd, self.world + '.sock') 
-    self.running = False
-    self.returncode = None
-    self.sub = None
     return
 
 
-  def start(self):
-    def replace_handler():
-      # Ignore SIGINT. The parent will handle this signal for the child.
-      signal.signal(signal.SIGINT, signal.SIG_IGN)
-
-    self.sub = subprocess.Popen(self.cmd, stdin=subprocess.PIPE,
-                                stdout=subprocess.PIPE, cwd=self.cwd,
-                                bufsize=1, universal_newlines=True,
-                                preexec_fn=replace_handler)
-    self.running = True
-    self.log.start(read_stream=self.sub.stdout, ctrl_stream=self.sub.stdin)
-    try:
-      self.sock.bind(self.address)
-    except OSError:
-      logging.error('Address already in use: ' + self.address)
-      self.stop(None, None)
+  def respond(self, connection):
+    tokens = connection.recv(256).decode().split()
+    if len(tokens) == 0:
       return
-    self.sock.listen()
-    super(Server, self).start()
+    verb = tokens[0].strip()
+    if verb == 'shell':
+      self.shell_server(connection)
     return
 
 
-  def run(self):
-    while self.sub.poll() == None:
-      try:
-        connection, client_addr = self.sock.accept()
-      except socket.timeout:
-        continue
-      try:
-        tokens = connection.recv(256).decode().split()
-        if len(tokens) == 0:
-          continue
-        verb = tokens[0].strip()
-        if verb == 'shell':
-          self.shell_server(connection)
-      finally:
-        connection.shutdown(socket.SHUT_RDWR)
-        connection.close()
-
-    self.stop(None, None)
-    return
-
-
-  def stop(self, signum, stack_frame):
-    if self.running:
-      self.running = False
-      out = None
-      try:
-        out, err = self.sub.communicate(input='stop', timeout=self.sub_timeout)
-      except subprocess.TimeoutExpired:
-        logging.warning('Timeout for subprocess exit has expired, '
-                        + 'sending the kill signal.')
-        self.sub.kill()
-      self.log.write(out)
-    self.log.stop()
-
-    try:
-      os.unlink(self.address)
-    except FileNotFoundError:
-      pass
-
-    if self.sub.returncode != None:
-      self.returncode = self.sub.returncode
-
+  def stop_sub(self):
+    out, err = self.sub.communicate(input='stop', timeout=self.sub_timeout)
     return
 
 
@@ -619,7 +411,7 @@ class History():
 
 
 
-class Shell(Log):
+class Shell(lineharness.Log):
   """Class representing a shell."""
 
 
@@ -875,14 +667,14 @@ if __name__ == '__main__':
     if len(sys.argv) < 3:
       print(usage)
       sys.exit(1)
-    server = Server(sys.argv[2])
+    server = MCServer(sys.argv[2])
     signal.signal(signal.SIGTERM , server.stop)
     signal.signal(signal.SIGINT, server.stop)
     server.start()
     server.join()
     sys.exit(server.returncode)
   elif sys.argv[1] == 'shell':
-    server = Server(sys.argv[2])
+    server = MCServer(sys.argv[2])
     shell = server.shell_client()
     try:
       shell.start()
