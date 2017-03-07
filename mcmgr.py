@@ -178,6 +178,20 @@ to another method."""
     return self.say(kwargs['player_name'])
 
 
+  def save_places(self):
+    """Save the places dictionary to a file."""
+    try:
+      with open(self.places_file, 'w') as fp:
+        fp.write(json.dumps(self.places))
+    except NameError:
+      # self.places_file was not defined in init, not a problem
+      pass
+    except FileNotFoundError as e:
+      logging.error('Error saving file: ' + self.places_file)
+      logging.debug(e)
+    return
+
+
   def save_coords(self, *args, **kwargs):
     """Save coordinates <x> and <z> as <name>. \
 Usage: save_coords <name> <x> <z>"""
@@ -196,16 +210,7 @@ Usage: save_coords <name> <x> <z>"""
     except (IndexError, ValueError):
       return self.invalid_args(self.save_coords.__doc__)
 
-    try:
-      with open(self.places_file, 'w') as fp:
-        fp.write(json.dumps(self.places))
-    except NameError:
-      # self.places_file was not defined in init, not a problem
-      pass
-    except FileNotFoundError as e:
-      logging.error('Error saving file: ' + self.places_file)
-      logging.debug(e)
-
+    self.save_places()
     return self.say('(%s, %s) saved as %s' % (args[1], args[2], args[0]))
 
 
@@ -239,6 +244,7 @@ Usage: save_coords <name> <x> <z>"""
       del self.places[player_name][args[0]]
     except (KeyError, IndexError):
       return self.say('No coordinates with that name.')
+    self.save_places()
     return self.say('%s deleted successfully.' % args[0])
 
 
