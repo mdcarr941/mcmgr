@@ -27,8 +27,8 @@ logging.basicConfig(filename=LOGFILE, level=logging.DEBUG)
 
 
 class MCLineParser(lineharness.LineParser):
-  public_methods = ['bearing', 'save_coords', 'list_coords', 'del_coords',\
-                    'admonish', 'randint', 'tell_time']
+  public_methods = ['help', 'save_coords', 'list_coords', 'del_coords',\
+                    'bearing', 'whoami', 'randint', 'tell_time']
 
 
   def __init__(self, cwd=None):
@@ -51,10 +51,98 @@ class MCLineParser(lineharness.LineParser):
     return
 
 
+  def tokenize(self, line, lws=' \t', delims='[]'):
+    ld = delims[0]
+    rd = delims[1]
+    line = line.lstrip().rstrip()
+
+    delim_flag = False
+    tokens = []
+    start = -1
+    for n in range(len(line)):
+      c = line[n]
+      if delim_flag:
+        if c != rd:
+          continue
+        elif n > start:
+          tokens.append(line[start:n])
+          delim_flag = False
+          start = -1
+          continue
+      if start < 0 and c == ld:
+        start = n + 1
+        delim_flag = True
+        continue
+      if start < 0 and c not in lws:
+        start = n
+        continue
+      if start >= 0 and c in lws:
+        if n > start:
+          tokens.append(line[start:n])
+        start = -1
+    if start >= 0:
+      tokens.append(line[start:])
+    return tokens
+
+
+  def delim_extract(self, token, delims='[]'):
+    left_delim = delims[0]
+    right_delim = delims[1]
+
+    lp = token.find(left_delim)
+    if lp == -1:
+      return None
+
+    rp = token.find(right_delim, lp)
+    if rp <= lp:
+      rp = None
+    return token[lp + 1:rp]
+
+
+  def parse(self, line):
+    """Tokenize a line, extract metadata, and pass on the remainding tokens \
+to another method."""
+
+    tokens = self.tokenize(line)
+    if len(tokens) > 0:
+      logging.debug('have tokens: ' + str(tokens))
+    if len(tokens) < 5:
+      return
+
+    cmd = tokens[4]
+    if cmd[0] != '!':
+      return
+    else:
+      cmd = cmd[1:]
+
+    meta = dict()
+    meta['time'] = tokens[0]
+    meta['tag'] = tokens[1]
+
+    meta['server_flag'] = False
+    meta['player_name'] = self.delim_extract(tokens[3], delims='<>')
+    if meta['player_name'] == None and tokens[3] == 'Server':
+      meta['player_name'] = 'Server'
+      meta['server_flag'] = True
+
+    logging.debug('tokens to be passed on: ' + str(tokens[5:]))
+    if cmd in self.public_methods:
+      method = self.__getattribute__(cmd)
+      try:
+        logging.debug('calling: ' + cmd)
+        return method(*tokens[5:], **meta).rstrip() + '\n'
+      except lineharness.StopLogException as e:
+        raise e
+      except Exception as e:
+        logging.error('Uncaught exception in called method.')
+        logging.debug(str(e))
+        return None
+
+
   def say(self, *args, **kwargs):
     cmd = '/say '
     try:
-      cmd += args[0]
+      cmd += str(args[0])
     except IndexError:
       pass
     return cmd
@@ -63,14 +151,36 @@ class MCLineParser(lineharness.LineParser):
   def invalid_args(self, *args, **kwargs):
     msg = 'Invalid arguments. '
     try:
-      msg += args[0]
+      msg += str(args[0])
     except IndexError:
       pass
     return self.say(msg)
 
 
+  def help(self, *args, **kwargs):
+    """List available commands and provide information about them."""
+    try:
+      method = self.__getattribute__(args[0])
+      if args[0] in self.public_methods:
+        return self.say(method.__doc__)
+    except (IndexError, AttributeError):
+      pass
+    return self.say(', '.join(self.public_methods))
+
+
+  def tell_time(self, *args, **kwargs):
+    """Return the current server time."""
+    return self.say(kwargs['time'])
+
+
+  def whoami(self, *args, **kwargs):
+    """Return the user name seen by the server."""
+    return self.say(kwargs['player_name'])
+
+
   def save_coords(self, *args, **kwargs):
-    """Save coordinates <x> and <z> as <name>. Usage: save_coords <name> <x> <z>"""
+    """Save coordinates <x> and <z> as <name>. \
+Usage: save_coords <name> <x> <z>"""
     if kwargs['server_flag']:
       player_name = '__global__'
     else:
@@ -169,114 +279,12 @@ bearing <x1 z1|name1> <x2 z2|name2>"""
       
 
   def randint(self, *args, **kwargs):
-    """Generate a random integer N such that 1 <= N <= b."""
-    b = args[0] 
+    """Generate a random integer N such that 1 <= N <= b. Usage: randint <b>"""
     try:
-      b = int(b)
-      cmd = str(random.randint(1, b))
-    except ValueError:
-      cmd = 'ValueError: expected an integer'
-    return self.say(cmd)
-
-
-  def admonish(self, *args, **kwargs):
-    target = args[0]
-    try:
-      player_name = kwargs['player_name']
-    except KeyError:
-      return
-    logging.debug('got player_name = ' + str(player_name))
-    if player_name == 'Server':
-      return self.say(target + ', did you really think that would work?')
-    else:
-      return self.say('You can\'t tell me what to do!')
-
-
-  def tell_time(self, *args, **kwargs):
-    return self.say(kwargs['time'])
-
-
-  def tokenize(self, line, lws=' \t', delims='[]'):
-    ld = delims[0]
-    rd = delims[1]
-    line = line.lstrip().rstrip()
-
-    delim_flag = False
-    tokens = []
-    start = -1
-    for n in range(len(line)):
-      c = line[n]
-      if delim_flag:
-        if c != rd:
-          continue
-        elif n > start:
-          tokens.append(line[start:n])
-          delim_flag = False
-          start = -1
-          continue
-      if start < 0 and c == ld:
-        start = n + 1
-        delim_flag = True
-        continue
-      if start < 0 and c not in lws:
-        start = n
-        continue
-      if start >= 0 and c in lws:
-        if n > start:
-          tokens.append(line[start:n])
-        start = -1
-    if start >= 0:
-      tokens.append(line[start:])
-    return tokens
-
-
-  def delim_extract(self, token, delims='[]'):
-    left_delim = delims[0]
-    right_delim = delims[1]
-
-    lp = token.find(left_delim)
-    if lp == -1:
-      return None
-
-    rp = token.find(right_delim, lp)
-    if rp <= lp:
-      rp = None
-    return token[lp + 1:rp]
-
-
-  def parse(self, line):
-    """Tokenize a line, extract metadata, and pass on the remainding tokens
-       to another method."""
-
-    tokens = self.tokenize(line)
-    if len(tokens) > 0:
-      logging.debug('have tokens: ' + str(tokens))
-    if len(tokens) < 5:
-      return
-
-    meta = dict()
-    meta['time'] = tokens[0]
-    meta['tag'] = tokens[1]
-
-    meta['server_flag'] = False
-    meta['player_name'] = self.delim_extract(tokens[3], delims='<>')
-    if meta['player_name'] == None and tokens[3] == 'Server':
-      meta['player_name'] = 'Server'
-      meta['server_flag'] = True
-
-    token = tokens[4]
-    logging.debug('tokens to be passed on: ' + str(tokens[5:]))
-    if token in self.public_methods:
-      method = self.__getattribute__(token)
-      try:
-        logging.debug('calling: ' + token)
-        return method(*tokens[5:], **meta).rstrip() + '\n'
-      except lineharness.StopLogException as e:
-        raise e
-      except Exception as e:
-        logging.error('Uncaught exception in called method.')
-        logging.debug(str(e))
-        return None
+      cmd = str(random.randint(1, int(args[0])))
+      return self.say(cmd)
+    except (ValueError, IndexError):
+      return self.invalid_args(self.randint.__doc__)
 
 
 
@@ -576,6 +584,7 @@ class Shell(lineharness.Log):
     except FileNotFoundError:
       # The socket for the server does not exist.
       print('Could not connect to:', self.address)
+      print('Is the server running?')
       return
 
     self.stdscr = curses.initscr()
