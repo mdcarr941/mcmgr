@@ -33,8 +33,8 @@ class Log(threading.Thread):
   # The stream object that the log will read from.
   read_stream = sys.stdin
   # The stream object the log will write to.
-  write_stream = sys.stdout
-  ctrl_stream = None
+  write_streams = [sys.stdout]
+  ctrl_streams = []
   log_len = 4096
   line_parser = None
   read_wait = 0.1
@@ -44,7 +44,7 @@ class Log(threading.Thread):
 
 
   def __init__(self, name=None, **kwargs):
-    super(Log, self).__init__(target='daemon', name=name)
+    super(Log, self).__init__(daemon=True, name=name)
 
     for kw in kwargs:
       if kw in dir(self):
@@ -63,16 +63,29 @@ class Log(threading.Thread):
     return
 
 
-  def start(self, read_stream=None, write_stream=None, ctrl_stream=None):
+  def start(self, read_stream=None, write_streams=None, ctrl_streams=None):
     if read_stream != None:
       self.read_stream = read_stream
-    if write_stream != None:
-      self.write_stream = write_stream
-    if ctrl_stream != None:
-      self.ctrl_stream = ctrl_stream
+    if write_streams != None:
+      self.write_streams = write_streams
+    if ctrl_streams != None:
+      self.ctrl_streams = ctrl_streams
     self.running = True
 
     super(Log, self).start()
+    return
+
+
+  def do_read(self):
+    try:
+      line = self.read_stream.readline()
+      if len(line) == 0:
+        raise StopLogException
+      self.write(line)
+    except (ValueError, OSError) as e:
+      logging.info('an exception occured in do_read')
+      logging.debug(e)
+      raise StopLogException
     return
 
 
@@ -80,21 +93,15 @@ class Log(threading.Thread):
     logging.debug('entering Log.run')
     while self.running:
       try:
-        rlist, _, _ = select.select([self.read_stream], [], [], self.read_wait)
-        for fileobj in rlist:
-          line = fileobj.readline()
-          if len(line) == 0:
-            self.running = False
-            break
-          self.write(line)
-      except (ValueError, OSError):
+        self.do_read()
+      except StopLogException:
         break
     self.running = False
     logging.debug('exiting Log.run')
     return
 
 
-  def stop(self):
+  def stop(self, *args):
     self.running = False
     return
 
@@ -115,27 +122,37 @@ class Log(threading.Thread):
     return [line for line in self]
 
 
-  def write(self, line):
+  def write_line(self, line):
     if line == None:
       return
-
-    try:
-      line = self.line_parser.mutator(line)
-      message = self.line_parser.parse(line)
-    except StopLogException:
-      self.stop()
-      return
-
+    line = self.line_parser.mutator(line)
+    message = self.line_parser.parse(line)
     self.log[self.write_pos] = line
     self.advance_write()
 
-    if message != None and self.ctrl_stream != None\
-                       and not self.ctrl_stream.closed:
-      for msg_line in message.splitlines(True):
-        self.ctrl_stream.write(msg_line)
+    if message != None:
+      for stream in self.ctrl_streams:
+        try:
+          stream.write(str(message))
+          stream.flush()
+        except (ValueError, OSError):
+          continue
 
-    if self.write_stream != None and not self.write_stream.closed:
-      self.write_stream.write(line)
+    for stream in self.write_streams:
+      try:
+        stream.write(line)
+        stream.flush()
+      except (ValueError, OSError):
+        continue
+    return
+
+
+  def write(self, lines):
+    if type(lines) == type(list()):
+      for line in lines:
+        self.write_line(line)
+    else:
+      self.write_line(lines)
     return
 
 
@@ -303,12 +320,12 @@ class Server(threading.Thread):
                                 bufsize=1, universal_newlines=True,
                                 preexec_fn=replace_handler)
     self.running = True
-    self.log.start(read_stream=self.sub.stdout, ctrl_stream=self.sub.stdin)
+    self.log.start(read_stream=self.sub.stdout, ctrl_streams=[self.sub.stdin])
     try:
       self.sock.bind(self.address)
     except OSError:
       logging.error('Address already in use: ' + self.address)
-      self.stop(None, None)
+      self.stop()
       return
     self.sock.listen()
     super(Server, self).start()
@@ -328,10 +345,9 @@ class Server(threading.Thread):
       try:
         self.respond(connection)
       finally:
-        connection.shutdown(socket.SHUT_RDWR)
         connection.close()
 
-    self.stop(None, None)
+    self.stop()
     return
 
 
@@ -341,7 +357,7 @@ class Server(threading.Thread):
     return
 
 
-  def stop(self, signum, stack_frame):
+  def stop(self, *args):
     if self.running:
       self.running = False
       out = None

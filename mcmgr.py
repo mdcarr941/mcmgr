@@ -22,6 +22,7 @@ MEMSTART = '256M'
 MEMMAX = '1G'
 LOGFILE = 'mcmgr.log'
 
+logger = logging.getLogger(__name__)
 logging.basicConfig(filename=LOGFILE, level=logging.DEBUG)
 
 
@@ -41,11 +42,11 @@ class MCLineParser(lineharness.LineParser):
         with open(self.places_file, 'r') as fp:
           self.places = json.loads(fp.read())
       except FileNotFoundError as e:
-        logging.error('could not find places.json in cwd: ' + cwd)
-        logging.debug(str(e))
+        logger.error('could not find places.json in cwd: ' + cwd)
+        logger.debug(str(e))
       except json.decoder.JSONDecodeError as e:
-        logging.error('problem decoding: ' + cwd + '/places.json')
-        logging.debug(str(e))
+        logger.error('problem decoding: ' + cwd + '/places.json')
+        logger.debug(str(e))
     if '__global__' not in self.places:
       self.places['__global__'] = dict()
     return
@@ -105,7 +106,7 @@ to another method."""
 
     tokens = self.tokenize(line)
     if len(tokens) > 0:
-      logging.debug('have tokens: ' + str(tokens))
+      logger.debug('have tokens: ' + str(tokens))
     if len(tokens) < 5:
       return
 
@@ -125,17 +126,17 @@ to another method."""
       meta['player_name'] = 'Server'
       meta['server_flag'] = True
 
-    logging.debug('tokens to be passed on: ' + str(tokens[5:]))
+    logger.debug('tokens to be passed on: ' + str(tokens[5:]))
     if cmd in self.public_methods:
       method = self.__getattribute__(cmd)
       try:
-        logging.debug('calling: ' + cmd)
+        logger.debug('calling: ' + cmd)
         return method(*tokens[5:], **meta).rstrip() + '\n'
       except lineharness.StopLogException as e:
         raise e
       except Exception as e:
-        logging.error('Uncaught exception in called method.')
-        logging.debug(str(e))
+        logger.error('Uncaught exception in called method.')
+        logger.debug(str(e))
         return None
 
 
@@ -187,8 +188,8 @@ to another method."""
       # self.places_file was not defined in init, not a problem
       pass
     except FileNotFoundError as e:
-      logging.error('Error saving file: ' + self.places_file)
-      logging.debug(e)
+      logger.error('Error saving file: ' + self.places_file)
+      logger.debug(e)
     return
 
 
@@ -355,38 +356,38 @@ class MCServer(lineharness.Server):
 
 
   def shell_server(self, connection):
-    logging.debug('shell_server was called')
+    logger.debug('shell_server was called')
     connection.settimeout(self.timeout)
 
-    output = ''.join(self.log.list_all_lines())
-    connection.sendall(bytes(output, 'utf-8'))
-    error = False
-    while self.returncode == None:
-      try:
-        output = ''.join(self.log.list_newlines())
-        connection.sendall(bytes(output, 'utf-8'))
+    try:
+      shell_stream = connection.makefile(mode='w', buffering=1)
+      output = ''.join(self.log.list_all_lines())
+      shell_stream.write(output)
+      shell_stream.flush()
+      self.log.write_streams.append(shell_stream)
+      error = False
+      while self.running and self.sub.poll() == None:
         try:
-          msg = connection.recv(4096)
-          if len(msg) > 0:
-            self.sub.stdin.write(msg.decode())
+          data = connection.recv(4096)
+          if len(data) == 0:
+            error = True
+            break
+          self.sub.stdin.write(data.decode())
         except socket.timeout:
           continue
         except OSError:
-          # connection is closed
           error = True
           break
-      except BrokenPipeError:
-        # connection is closed
-        error = True
-        break
 
-    if not error:
-      try:
-        connection.sendall(bytes('The server has shut down.', 'utf-8'))
-      except OSError or BrokenPipeError:
-        pass
-    logging.debug('shell_server is returning')
-    return
+      if not error:
+        shell_stream.write('The server has shut down.')
+      shell_stream.close()
+    except OSError:
+      pass
+    finally:
+      self.log.write_streams.remove(shell_stream)
+      logger.debug('shell_server is returning')
+      return
 
 
 
@@ -434,9 +435,9 @@ class Shell(lineharness.Log):
     self.address = address
     self.world = world
 
-    self.sock.settimeout(None)
+    self.sock.setblocking(True)
     super(Shell, self).__init__(read_stream=sock.makefile(buffering=1),
-                                write_stream=None,
+                                write_streams=[],
                                 name=self.world + "-Shell-Log")
 
     self.prompt = '[{}]$'
@@ -464,8 +465,8 @@ class Shell(lineharness.Log):
     return
 
 
-  def write(self, line):
-    super(Shell, self).write(line)
+  def write(self, lines):
+    super(Shell, self).write(lines)
     self.most_recent_read()
     self.draw_screen()
     return
@@ -584,6 +585,23 @@ class Shell(lineharness.Log):
     return
 
 
+  def start_shell(self):
+    self.stdscr = curses.initscr()
+    self.stdscr.clear()
+    curses.cbreak()
+    curses.noecho()
+    self.stdscr.keypad(True)
+    return
+
+
+  def stop_shell(self):
+    self.stdscr.keypad(False)
+    curses.echo()
+    curses.nocbreak()
+    curses.endwin()
+    return
+
+
   def start(self):
     try:
       self.sock.connect(self.address)
@@ -593,12 +611,7 @@ class Shell(lineharness.Log):
       print('Is the server running?')
       return
 
-    self.stdscr = curses.initscr()
-    self.stdscr.clear()
-    curses.cbreak()
-    curses.noecho()
-    self.stdscr.keypad(True)
-
+    self.start_shell()
     try:
       self.update_size()
       self.logwin = curses.newwin(self.max_y-1,self.max_x, 0,0)
@@ -612,6 +625,10 @@ class Shell(lineharness.Log):
         c = self.stdscr.getch()
         if c == ascii.EOT:
           break
+        elif c == curses.KEY_F1:
+          self.stop_shell()
+          import pdb
+          pdb.set_trace()
         elif c == curses.KEY_RESIZE:
           self.update_size()
         elif c == curses.KEY_UP:
@@ -659,10 +676,7 @@ class Shell(lineharness.Log):
           curses.flash()
         self.draw_screen()
     finally:
-      self.stdscr.keypad(False)
-      curses.echo()
-      curses.nocbreak()
-      curses.endwin()
+      self.stop_shell()
       self.stop()
       self.sock.close()
     return
