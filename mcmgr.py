@@ -657,11 +657,11 @@ class Shell(lineharness.Log):
           else:
             curses.beep()
             curses.flash()
-        elif c == ascii.BS or c == ascii.DEL:
+        elif c == ascii.BS or c == ascii.DEL or c == curses.KEY_BACKSPACE:
           self.buff = self.buff[:self.cursor_pos-1]\
                     + self.buff[self.cursor_pos:]
           self.seek_cursor(-1)
-        elif c == ascii.NL or c == ascii.LF:
+        elif c == ascii.NL or c == ascii.LF or c == curses.KEY_ENTER:
           self.history.write(self.buff)
           if self.running:
             try:
