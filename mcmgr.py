@@ -9,6 +9,8 @@ import curses
 from curses import ascii
 import signal
 import json
+import io
+import subprocess
 
 import lineharness
 try:
@@ -17,6 +19,7 @@ except ImportError:
   pass
 
 WORLDS_DIR = os.path.join(os.environ['HOME'], 'worlds')
+BACKUPS_DIR = os.path.join(os.environ['HOME'], 'backups')
 MCSERVER = os.path.join(os.environ['HOME'], 'mcservers', 'minecraft_server.jar')
 MEMSTART = '256M'
 MEMMAX = '1G'
@@ -295,6 +298,15 @@ bearing <x1 z1|name1> <x2 z2|name2>"""
 
 
 
+class BackupLineParser(MCLineParser):
+  def parse(self, line):
+    tokens = self.tokenize(line)
+    message = ' '.join(tokens[3:])
+    if message == 'Saved the world':
+      raise StopLogException
+
+
+
 class MCServer(lineharness.Server):
   """Class representing a server's supervising thread."""
   # The name of the world the server will host.
@@ -309,16 +321,26 @@ class MCServer(lineharness.Server):
   memmax = MEMMAX
 
 
-  def __init__(self, world, line_parser=None, **kwargs):
+  def __init__(self, world, cwd=None, address=None, backup_dir=None,
+               line_parser=None, **kwargs):
     if type(world) != type(str()):
       raise TypeError('Expected a string argument.')
     self.world = world
 
-    self.cwd = os.path.join(WORLDS_DIR, world)
-    if not os.path.isdir(self.cwd):
-      raise Exception('Not a directory: ' + self.cwd)
+    if cwd == None:
+      self.cwd = os.path.join(WORLDS_DIR, world)
+    else:
+      self.cwd = cwd
 
-    self.address = os.path.join(self.cwd, self.world + '.sock') 
+    if address == None:
+      self.address = os.path.join(self.cwd, self.world + '.sock') 
+    else:
+      self.address = address
+
+    if backup_dir == None:
+      self.backup_dir = os.path.join(BACKUPS_DIR, world)
+    else:
+      self.backup_dir = backup_dir
 
     if line_parser == None:
       line_parser = MCLineParser(cwd=self.cwd)
@@ -326,6 +348,10 @@ class MCServer(lineharness.Server):
     super(MCServer, self).__init__(name=self.world, line_parser=line_parser,
                                    **kwargs)
 
+    if not os.path.isdir(self.cwd):
+      raise Exception('Not a directory: ' + self.cwd)
+    if not os.path.isdir(self.backup_dir):
+      raise Exception('Invalid backup directory: ' + self.backup_dir)
     if not os.path.isfile(self.mcserver):
       raise Exception('Not a file: ' + self.mcserver)
 
@@ -343,6 +369,8 @@ class MCServer(lineharness.Server):
     verb = tokens[0].strip()
     if verb == 'shell':
       self.shell_server(connection)
+    elif verb == 'backup':
+      self.backup_server(connection)
     return
 
 
@@ -387,6 +415,52 @@ class MCServer(lineharness.Server):
     finally:
       self.log.write_streams.remove(shell_stream)
       logger.debug('shell_server is returning')
+      return
+
+
+  def backup_client(self):
+    returncode = -1
+    try:
+      self.sock.connect(self.address)
+    except FileNotFoundError:
+      print('Could not connect to:', self.address)
+      print('Is the server running?')
+      return returncode
+
+    try:
+      self.sock.sendall(bytes('backup', 'utf-8'))
+      self.sock.setblocking(True)
+      self.sock.recv(1)
+      cmd = ['rdiff-backup', self.cwd, self.backup_dir]
+      rdiff = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+      out, err = rdiff.communicate()
+      print(out.decode(), err.decode(), sep='\n')
+      returncode = rdiff.returncode
+    except Exception as e:
+      logger.error('an exception occured in backup_client')
+      logger.debug(e)
+    finally:
+      self.sock.close()
+      return returncode
+
+
+  def backup_server(self, connection):
+    logger.debug('backup_server called')
+    buf = io.StringIO()
+    self.log.write_streams.append(buf)
+    try:
+      backup_log = lineharness.Log(read_stream=buf,
+                                   line_parser=BackupLineParser())
+      backup_log.start()
+      self.sub.stdin.write('save-all flush\n')
+      backup_log.join()
+    except Exception as e:
+      logger.error('an exception occured in backup_server')
+      logger.debug(e)
+    finally:
+      self.log.write_streams.remove(buf)
+      buf.close()
+      logger.debug('backup_server returning')
       return
 
 
@@ -710,6 +784,9 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
       shell.stop()
     sys.exit(0)
+  elif sys.argv[1] == 'backup':
+    server = MCServer(sys.argv[2])
+    sys.exit(server.backup_client())
   else:
     print(usage)
     sys.exit(1)
