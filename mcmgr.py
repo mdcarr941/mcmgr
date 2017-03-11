@@ -11,6 +11,7 @@ import signal
 import json
 import io
 import subprocess
+import threading
 
 import lineharness
 try:
@@ -368,9 +369,13 @@ class MCServer(lineharness.Server):
       return
     verb = tokens[0].strip()
     if verb == 'shell':
-      self.shell_server(connection)
+      worker = threading.Thread(target=self.shell_server,
+                                args=(self, connection), daemon=True)
+      worker.start()
     elif verb == 'backup':
-      self.backup_server(connection)
+      worker = threading.Thread(target=self.backup_server,
+                                args=(self, connection), daemon=True)
+      worker.start()
     return
 
 
@@ -383,24 +388,24 @@ class MCServer(lineharness.Server):
     return Shell(self.sock, self.address, self.world)
 
 
-  def shell_server(self, connection):
+  def shell_server(self, server, connection):
     logger.debug('shell_server was called')
-    connection.settimeout(self.timeout)
+    connection.settimeout(server.timeout)
 
     try:
       shell_stream = connection.makefile(mode='w', buffering=1)
-      output = ''.join(self.log.list_all_lines())
+      output = ''.join(server.log.list_all_lines())
       shell_stream.write(output)
       shell_stream.flush()
-      self.log.write_streams.append(shell_stream)
+      server.log.write_streams.append(shell_stream)
       error = False
-      while self.running and self.sub.poll() == None:
+      while server.running and server.sub.poll() == None:
         try:
           data = connection.recv(4096)
           if len(data) == 0:
             error = True
             break
-          self.sub.stdin.write(data.decode())
+          server.sub.stdin.write(data.decode())
         except socket.timeout:
           continue
         except OSError:
@@ -410,10 +415,15 @@ class MCServer(lineharness.Server):
       if not error:
         shell_stream.write('The server has shut down.')
       shell_stream.close()
-    except OSError:
-      pass
+    except OSError as e:
+      logger.error('an exception occured in shell_server')
+      logger.debug(e)
     finally:
-      self.log.write_streams.remove(shell_stream)
+      try:
+        server.log.write_streams.remove(shell_stream)
+      except ValueError:
+        pass
+      connection.close()
       logger.debug('shell_server is returning')
       return
 
@@ -436,7 +446,10 @@ class MCServer(lineharness.Server):
       print('backing up "%s" to "%s"' % (self.cwd, self.backup_dir))
       rdiff = subprocess.Popen(cmd, stdout=subprocess.PIPE)
       out, err = rdiff.communicate()
-      print(out.decode(), err.decode(), sep='\n')
+      if type(out) == type(bytes()):
+        print(out.decode())
+      if type(err) == type(bytes()):
+        print(err.decode())
       returncode = rdiff.returncode
     except Exception as e:
       logger.error('an exception occured in backup_client')
@@ -444,22 +457,25 @@ class MCServer(lineharness.Server):
     return returncode
 
 
-  def backup_server(self, connection):
+  def backup_server(self, server, connection):
     logger.debug('backup_server called')
     buf = io.StringIO()
-    self.log.write_streams.append(buf)
+    server.log.write_streams.append(buf)
     try:
       backup_log = lineharness.Log(read_stream=buf,
                                    line_parser=BackupLineParser())
       backup_log.start()
-      self.sub.stdin.write('save-all flush\n')
+      server.sub.stdin.write('save-all flush\n')
       backup_log.join()
+      # This unblocks the client process.
+      connection.sendall(b'\x01')
     except Exception as e:
       logger.error('an exception occured in backup_server')
       logger.debug(e)
     finally:
-      self.log.write_streams.remove(buf)
+      server.log.write_streams.remove(buf)
       buf.close()
+      connection.close()
       logger.debug('backup_server returning')
       return
 

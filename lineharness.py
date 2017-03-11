@@ -342,10 +342,7 @@ class Server(threading.Thread):
         connection, client_addr = self.sock.accept()
       except socket.timeout:
         continue
-      try:
-        self.respond(connection)
-      finally:
-        connection.close()
+      self.respond(connection)
 
     self.stop()
     return
