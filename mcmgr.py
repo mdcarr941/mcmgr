@@ -350,7 +350,7 @@ class MCServer(lineharness.Server):
 
     if not os.path.isdir(self.cwd):
       raise Exception('Not a directory: ' + self.cwd)
-    if not os.path.isdir(self.backup_dir):
+    if not os.path.isdir(os.path.dirname(self.backup_dir)):
       raise Exception('Invalid backup directory: ' + self.backup_dir)
     if not os.path.isfile(self.mcserver):
       raise Exception('Not a file: ' + self.mcserver)
@@ -420,18 +420,20 @@ class MCServer(lineharness.Server):
 
   def backup_client(self):
     returncode = -1
-    try:
-      self.sock.connect(self.address)
-    except FileNotFoundError:
-      print('Could not connect to:', self.address)
-      print('Is the server running?')
-      return returncode
 
     try:
+      self.sock.connect(self.address)
       self.sock.sendall(bytes('backup', 'utf-8'))
       self.sock.setblocking(True)
       self.sock.recv(1)
+      self.sock.close()
+    except FileNotFoundError:
+      # The server isn't running, just do the backup.
+      pass
+
+    try:
       cmd = ['rdiff-backup', self.cwd, self.backup_dir]
+      print('backing up "%s" to "%s"' % (self.cwd, self.backup_dir))
       rdiff = subprocess.Popen(cmd, stdout=subprocess.PIPE)
       out, err = rdiff.communicate()
       print(out.decode(), err.decode(), sep='\n')
@@ -439,9 +441,7 @@ class MCServer(lineharness.Server):
     except Exception as e:
       logger.error('an exception occured in backup_client')
       logger.debug(e)
-    finally:
-      self.sock.close()
-      return returncode
+    return returncode
 
 
   def backup_server(self, connection):
@@ -785,8 +785,18 @@ if __name__ == '__main__':
       shell.stop()
     sys.exit(0)
   elif sys.argv[1] == 'backup':
-    server = MCServer(sys.argv[2])
-    sys.exit(server.backup_client())
+    if len(sys.argv) >= 3:
+      server = MCServer(sys.argv[2])
+      sys.exit(server.backup_client())
+    else:
+      returncode = 0
+      for world in os.listdir(path=WORLDS_DIR):
+        path = os.path.join(WORLDS_DIR, world)
+        if os.path.isdir(path):
+          server = MCServer(world)
+          if server.backup_client() != 0:
+            returncode = -1
+      sys.exit(returncode)
   else:
     print(usage)
     sys.exit(1)
