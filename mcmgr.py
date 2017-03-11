@@ -25,8 +25,8 @@ LOGFILE = os.path.join(os.environ['HOME'], 'mcmgr.log')
 
 logger = logging.getLogger('mcmgr')
 
-def configure_logging():
-  logger.setLevel(logging.DEBUG)
+def configure_logging(level):
+  logger.setLevel(level)
   f = logging.Formatter(fmt='%(asctime)s:%(levelname)s:%(message)s')
   h = logging.StreamHandler(stream=sys.stderr)
   h.setLevel(logging.WARNING)
@@ -37,7 +37,7 @@ def configure_logging():
   h.setFormatter(f)
   logger.addHandler(h)
 
-configure_logging()
+configure_logging(logging.INFO)
 
 
 
