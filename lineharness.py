@@ -7,6 +7,8 @@ import socket
 import subprocess
 import logging
 
+logger = logging.getLogger('mcmgr.lineharness')
+
 
 
 class StopLogException(Exception):
@@ -83,21 +85,21 @@ class Log(threading.Thread):
         raise StopLogException
       self.write(line)
     except (ValueError, OSError) as e:
-      logging.info('an exception occured in do_read')
-      logging.debug(e)
+      logger.info('an exception occured in do_read')
+      logger.debug(e)
       raise StopLogException
     return
 
 
   def run(self):
-    logging.debug('entering Log.run')
+    logger.debug('entering Log.run')
     while self.running:
       try:
         self.do_read()
       except StopLogException:
         break
     self.running = False
-    logging.debug('exiting Log.run')
+    logger.debug('exiting Log.run')
     return
 
 
@@ -324,7 +326,7 @@ class Server(threading.Thread):
     try:
       self.sock.bind(self.address)
     except OSError:
-      logging.error('Address already in use: ' + self.address)
+      logger.error('Address already in use: ' + self.address)
       self.stop()
       return
     self.sock.listen()
@@ -361,7 +363,7 @@ class Server(threading.Thread):
       try:
         self.stop_sub()
       except subprocess.TimeoutExpired:
-        logging.warning('Timeout for subprocess exit has expired, '
+        logger.warning('Timeout for subprocess exit has expired, '
                         + 'sending the kill signal.')
         self.sub.kill()
       self.log.write(out)

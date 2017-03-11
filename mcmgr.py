@@ -14,20 +14,30 @@ import subprocess
 import threading
 
 import lineharness
-try:
-  import bearing
-except ImportError:
-  pass
+import bearing
 
 WORLDS_DIR = os.path.join(os.environ['HOME'], 'worlds')
 BACKUPS_DIR = os.path.join(os.environ['HOME'], 'backups')
 MCSERVER = os.path.join(os.environ['HOME'], 'mcservers', 'minecraft_server.jar')
 MEMSTART = '256M'
 MEMMAX = '1G'
-LOGFILE = 'mcmgr.log'
+LOGFILE = os.path.join(os.environ['HOME'], 'mcmgr.log')
 
-logger = logging.getLogger(__name__)
-logging.basicConfig(filename=LOGFILE, level=logging.DEBUG)
+logger = logging.getLogger('mcmgr')
+
+def configure_logging():
+  logger.setLevel(logging.DEBUG)
+  f = logging.Formatter(fmt='%(asctime)s:%(levelname)s:%(message)s')
+  h = logging.StreamHandler(stream=sys.stderr)
+  h.setLevel(logging.WARNING)
+  h.setFormatter(f)
+  logger.addHandler(h)
+  h = logging.FileHandler(LOGFILE)
+  h.setLevel(logging.DEBUG)
+  h.setFormatter(f)
+  logger.addHandler(h)
+
+configure_logging()
 
 
 
