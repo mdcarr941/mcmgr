@@ -335,6 +335,7 @@ class Server(threading.Thread):
 
 
   def respond(self, connection):
+    connection.close()
     return
 
 
