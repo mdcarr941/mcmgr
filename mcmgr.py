@@ -219,6 +219,7 @@ Usage: save_coords <name> <x> <z>"""
       player_places = self.places[player_name]
     except KeyError:
       player_places = dict()
+      self.places[player_name] = player_places
 
     try:
       player_places[args[0]] = [int(args[1]), int(args[2])]
