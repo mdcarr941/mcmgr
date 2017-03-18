@@ -43,7 +43,8 @@ configure_logging(logging.INFO)
 
 class MCLineParser(lineharness.LineParser):
   public_methods = ['help', 'save_coords', 'list_coords', 'del_coords',\
-                    'bearing', 'whoami', 'randint', 'tell_time']
+                    'display_coords', 'bearing', 'whoami', 'randint',\
+                    'tell_time']
 
 
   def __init__(self, cwd=None):
@@ -207,14 +208,18 @@ to another method."""
     return
 
 
+  def get_player_name(self, **kwargs):
+    if kwargs['server_flag']:
+      return '__global__'
+    else:
+      return kwargs['player_name']
+
+
   def save_coords(self, *args, **kwargs):
     """Save coordinates <x> and <z> as <name>. \
-Usage: save_coords <name> <x> <z>"""
-    if kwargs['server_flag']:
-      player_name = '__global__'
-    else:
-      player_name = kwargs['player_name']
+Usage: !save_coords <name> <x> <z>"""
 
+    player_name = self.get_player_name(**kwargs)
     try:
       player_places = self.places[player_name]
     except KeyError:
@@ -230,8 +235,33 @@ Usage: save_coords <name> <x> <z>"""
     return self.say('(%s, %s) saved as %s' % (args[1], args[2], args[0]))
 
 
+  def display_coords(self, *args, **kwargs):
+    """Display a list of coordinates. \
+Usage: !display_coords <name1> <name2> ..."""
+    player_name = self.get_player_name(**kwargs)
+    try:
+      player_places = self.places[player_name]
+    except KeyError:
+      player_places = self.places['__global__']
+
+    lines = []
+    while True:
+      try:
+        coords = player_places[args[0]]
+      except KeyError:
+        continue
+      except IndexError:
+        break
+      lines.append('%s = (%d, %d)' % (args[0], coords[0], coords[1]))
+      args = args[1:]
+    if len(lines) > 0:
+      return self.say('\n/say '.join(lines))
+    else:
+      return self.say('unknown coordinates')
+
+
   def list_coords(self, *args, **kwargs):
-    """List all coordinates usable by a player. Usage: list_coords"""
+    """List all coordinates usable by a player. Usage: !list_coords"""
 
     def make_list(places):
       str_list = []
@@ -251,7 +281,7 @@ Usage: save_coords <name> <x> <z>"""
 
 
   def del_coords(self, *args, **kwargs):
-    """Delete the coordinates known by <name>. Usage: del_coords <name>"""
+    """Delete the coordinates known by <name>. Usage: !del_coords <name>"""
     if kwargs['server_flag']:
       player_name = '__global__'
     else:
@@ -267,7 +297,7 @@ Usage: save_coords <name> <x> <z>"""
   def bearing(self, *args, **kwargs):
     """Get the direction needed to travel between two points. Points \
 can be referred to by name or by their X and Z coordinates. Usage: \
-bearing <x1 z1|name1> <x2 z2|name2>"""
+!bearing <x1 z1|name1> <x2 z2|name2>"""
     try:
       bearing.bearing((0,0), (0,0))
     except NameError:
@@ -301,7 +331,7 @@ bearing <x1 z1|name1> <x2 z2|name2>"""
       
 
   def randint(self, *args, **kwargs):
-    """Generate a random integer N such that 1 <= N <= b. Usage: randint <b>"""
+    """Generate a random integer N such that 1 <= N <= b. Usage: !randint <b>"""
     try:
       cmd = str(random.randint(1, int(args[0])))
       return self.say(cmd)
