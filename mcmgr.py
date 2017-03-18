@@ -148,6 +148,7 @@ to another method."""
         logger.debug('calling: ' + cmd)
         return method(*tokens[5:], **meta).rstrip() + '\n'
       except lineharness.StopLogException as e:
+        logger.debug('StopLog exception raised.')
         raise e
       except Exception as e:
         logger.error('Uncaught exception in called method.')
@@ -249,11 +250,16 @@ Usage: !display_coords <name1> <name2> ..."""
       try:
         coords = player_places[args[0]]
       except KeyError:
-        continue
+        try:
+          coords = self.places['__global__'][args[0]]
+        except KeyError:
+          args = args[1:]
+          continue
       except IndexError:
         break
       lines.append('%s = (%d, %d)' % (args[0], coords[0], coords[1]))
       args = args[1:]
+
     if len(lines) > 0:
       return self.say('\n/say '.join(lines))
     else:
