@@ -34,7 +34,7 @@ def configure_logging(level):
   h.setFormatter(f)
   logger.addHandler(h)
 
-configure_logging(logging.DEBUG)
+configure_logging(logging.INFO)
 
 
 
