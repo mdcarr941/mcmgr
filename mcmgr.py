@@ -5,13 +5,10 @@ import os
 import socket
 import random
 import logging
-import curses
-from curses import ascii
 import signal
 import json
 import io
 import subprocess
-import threading
 
 import lineharness
 import bearing
@@ -37,7 +34,7 @@ def configure_logging(level):
   h.setFormatter(f)
   logger.addHandler(h)
 
-configure_logging(logging.INFO)
+configure_logging(logging.DEBUG)
 
 
 
@@ -156,12 +153,12 @@ to another method."""
         return None
 
 
-  def say(self, *args, **kwargs):
+  def say(self, lines):
     cmd = '/say '
-    try:
-      cmd += str(args[0])
-    except IndexError:
-      pass
+    if type(lines) == type(list()):
+      cmd += '\n/say '.join(lines)
+    else:
+      cmd += str(lines)
     return cmd
 
 
@@ -182,7 +179,8 @@ to another method."""
         return self.say(method.__doc__)
     except (IndexError, AttributeError):
       pass
-    return self.say(', '.join(self.public_methods))
+    method_names = ['!' + x for x in self.public_methods]
+    return self.say(', '.join(method_names))
 
 
   def tell_time(self, *args, **kwargs):
@@ -261,7 +259,7 @@ Usage: !display_coords <name1> <name2> ..."""
       args = args[1:]
 
     if len(lines) > 0:
-      return self.say('\n/say '.join(lines))
+      return self.say(lines)
     else:
       return self.say('unknown coordinates')
 
@@ -270,34 +268,42 @@ Usage: !display_coords <name1> <name2> ..."""
     """List all coordinates usable by a player. Usage: !list_coords"""
 
     def make_list(places):
-      str_list = []
+      lines = []
       for key, val in places.items():
-        str_list.append('%s = (%d, %d)' % (key, val[0], val[1]))
-      return str_list
+        lines.append('%s = (%d, %d)' % (key, val[0], val[1]))
+      return lines
       
-    str_list = make_list(self.places['__global__'])
+    lines = make_list(self.places['__global__'])
     try:
-      str_list += make_list(self.places[kwargs['player_name']])
+      lines += make_list(self.places[kwargs['player_name']])
     except KeyError:
       pass
-    if len(str_list) > 0:
-      return self.say('\n/say '.join(str_list))
+    if len(lines) > 0:
+      return self.say(lines)
     else:
       return self.say('no saved coordinates')
 
 
   def del_coords(self, *args, **kwargs):
-    """Delete the coordinates known by <name>. Usage: !del_coords <name>"""
+    """Delete a list of coordinates. Usage: !del_coords <name1> <name2> ..."""
     if kwargs['server_flag']:
       player_name = '__global__'
     else:
       player_name = kwargs['player_name']
-    try:
-      del self.places[player_name][args[0]]
-    except (KeyError, IndexError):
-      return self.say('No coordinates with that name.')
+
+    player_places = self.places[player_name]
+    lines = []
+    while True:
+      try:
+        del player_places[args[0]]
+        lines.append(args[0] + ' deleted successfully.')
+      except KeyError:
+        lines.append('coordinates are unknown or global: ' + args[0])
+      except IndexError:
+        break
+      args = args[1:]
     self.save_places()
-    return self.say('%s deleted successfully.' % args[0])
+    return self.say(lines)
 
 
   def bearing(self, *args, **kwargs):
@@ -407,72 +413,13 @@ class MCServer(lineharness.Server):
       self.cmd = [self.cmd]
     self.cmd += ['-Xms' + str(self.memstart), '-Xmx' + str(self.memmax),
                   '-jar', self.mcserver, 'nogui']
-    return
 
-
-  def respond(self, connection):
-    tokens = connection.recv(256).decode().split()
-    if len(tokens) == 0:
-      return
-    verb = tokens[0].strip()
-    if verb == 'shell':
-      worker = threading.Thread(target=self.shell_server,
-                                args=(self, connection), daemon=True)
-      worker.start()
-    elif verb == 'backup':
-      worker = threading.Thread(target=self.backup_server,
-                                args=(self, connection), daemon=True)
-      worker.start()
+    self.server_methods += ['backup_server']
     return
 
 
   def stop_sub(self):
-    out, err = self.sub.communicate(input='stop', timeout=self.sub_timeout)
-    return
-
-
-  def shell_client(self):
-    return Shell(self.sock, self.address, self.world)
-
-
-  def shell_server(self, server, connection):
-    logger.debug('shell_server was called')
-    connection.settimeout(server.timeout)
-
-    try:
-      shell_stream = connection.makefile(mode='w', buffering=1)
-      output = ''.join(server.log.list_all_lines())
-      shell_stream.write(output)
-      shell_stream.flush()
-      server.log.write_streams.append(shell_stream)
-      error = False
-      while server.running and server.sub.poll() == None:
-        try:
-          data = connection.recv(4096)
-          if len(data) == 0:
-            error = True
-            break
-          server.sub.stdin.write(data.decode())
-        except socket.timeout:
-          continue
-        except OSError:
-          error = True
-          break
-
-      if not error:
-        shell_stream.write('The server has shut down.')
-      shell_stream.close()
-    except OSError as e:
-      logger.error('an exception occured in shell_server')
-      logger.debug(e)
-    finally:
-      try:
-        server.log.write_streams.remove(shell_stream)
-      except ValueError:
-        pass
-      connection.close()
-      logger.debug('shell_server is returning')
-      return
+    return self.sub.communicate(input='stop', timeout=self.sub_timeout)
 
 
   def backup_client(self):
@@ -482,6 +429,7 @@ class MCServer(lineharness.Server):
       self.sock.connect(self.address)
       self.sock.sendall(bytes('backup', 'utf-8'))
       self.sock.setblocking(True)
+      # This will block until the server has finished saving the world.
       self.sock.recv(1)
       self.sock.close()
     except FileNotFoundError:
@@ -504,7 +452,7 @@ class MCServer(lineharness.Server):
     return returncode
 
 
-  def backup_server(self, server, connection):
+  def backup_server(self, server, connection, *args):
     logger.debug('backup_server called')
     buf = io.StringIO()
     server.log.write_streams.append(buf)
@@ -525,298 +473,6 @@ class MCServer(lineharness.Server):
       connection.close()
       logger.debug('backup_server returning')
       return
-
-
-
-class History():
-
-
-  def __init__(self, length=2048):
-    self.lines_len = length
-    self.lines = ['']
-    self.lines *= self.lines_len
-    self.write_pos = 0
-    self.read_pos = 0
-    return
-
-
-  def write(self, line):
-    self.lines[self.write_pos] = line
-    self.read_pos = self.write_pos
-    self.write_pos = (self.write_pos + 1) % self.lines_len
-    return
-
-
-  def read_forward(self):
-    if (self.write_pos - self.read_pos) % self.lines_len > 1:
-      self.read_pos = (self.read_pos + 1) % self.lines_len
-      line = self.lines[(self.read_pos + 1) % self.lines_len]
-    else:
-      line = ''
-    return line
-
-
-  def read_backwards(self):
-    line = self.lines[self.read_pos]
-    self.read_pos = (self.read_pos - 1) % self.lines_len
-    return line
-
-
-
-class Shell(lineharness.Log):
-  """Class representing a shell."""
-
-
-  def __init__(self, sock, address, world, **kwargs):
-    self.sock = sock
-    self.address = address
-    self.world = world
-
-    self.sock.setblocking(True)
-    super(Shell, self).__init__(read_stream=sock.makefile(buffering=1),
-                                write_streams=[],
-                                name=self.world + "-Shell-Log")
-
-    self.prompt = '[{}]$'
-    if len(self.world) > 0:
-      self.prompt = self.prompt.format(self.world)
-    else:
-      self.prompt = '$'
-
-    # The number of lines the terminal has.
-    self.max_y = 40
-    # The number of columns the terminal has.
-    self.max_x = 80
-    # Note that all y < max_y and x < max_x for all (y,x) coordinates. 
-
-    # Width of the pad used to hold user input.
-    self.input_pad_len = 512
-    # The width of the part of the pad that will be displayed.
-    self.display_width = 0
-    # The left-most x-coordinate in the input pad which will be displayed.
-    self.start_x = 0
-    self.cursor_pos = 0
-
-    self.history = History()
-    self.buff = ''
-    return
-
-
-  def write(self, lines):
-    super(Shell, self).write(lines)
-    self.most_recent_read()
-    self.draw_screen()
-    return
-
-
-  def update_size(self):
-    if self.stdscr == None:
-      return
-    self.max_y, self.max_x = self.stdscr.getmaxyx()
-    self.display_width = self.max_x-1 - len(self.prompt)-1 
-    if curses.is_term_resized(self.max_y, self.max_x):
-      curses.resizeterm(self.max_y, self.max_x)
-      if self.logwin != None:
-        self.logwin.resize(self.max_y-1, self.max_x)
-      if self.promptwin != None:
-        if self.max_x <= len(self.prompt):
-          self.promptwin.erase()
-          self.promptwin.resize(1, 1)
-          self.promptwin.addstr(0,0, '$')
-          self.promptwin.refresh()
-        else:
-          self.promptwin.erase()
-          self.promptwin.resize(1, len(self.prompt)+1)
-          self.promptwin.addstr(0,0, self.prompt)
-          self.promptwin.refresh()
-    return
-
-
-  def split_string(self, string, n):
-    """Split a string into blocks each of length n."""
-    if len(string) == 0:
-      return ['']
-    blocks = []
-    while len(string) > 0:
-      blocks.append(string[:n])
-      string = string[n:]
-    return blocks
-
-
-  def draw_log(self):
-    """Draw the log on screen with the line pointed to by read_pos at
-       the bottom. This is accomplished by filling the screen from the bottom
-       to the top."""
-    if self.logwin == None:
-      return
-    self.logwin.clear()
-    max_y, max_x = self.logwin.getmaxyx()
-    lines = self.list_prev_lines(max_y)
-    k = 0
-    n = max_y - 1
-    while n >= 0:
-      if k < len(lines):
-        line = lines[k]
-        k += 1
-      else:
-        break
-      if len(line) == 0:
-        line = '~'
-      line = line.rstrip('\n\r')
-      blocks = self.split_string(line, max_x-1)
-      blocks.reverse()
-      for block in blocks:
-        self.logwin.addstr(n, 0, block)
-        n -= 1
-        if n < 0:
-          break
-    self.logwin.noutrefresh()
-    return
-
-
-  def draw_screen(self):
-    if self.stdscr != None:
-      self.stdscr.noutrefresh()
-    self.draw_log()
-    if self.promptwin != None:
-      self.promptwin.clear()
-      self.promptwin.addstr(0,0, self.prompt)
-      self.promptwin.noutrefresh()
-    if self.editwin != None:
-      self.editwin.clear()
-      self.editwin.addstr(0,0, self.buff)
-      self.editwin.noutrefresh(0,self.start_x, self.max_y-1,len(self.prompt)+1,
-                                               self.max_y-1,self.max_x-1)
-    curses.setsyx(self.max_y-1, len(self.prompt) + 1 
-                                + self.cursor_pos - self.start_x)
-    curses.doupdate()
-    return
-
-
-  def check_startx(self):
-    if self.cursor_pos < self.start_x:
-      self.start_x = self.cursor_pos
-    elif self.cursor_pos - self.start_x > self.display_width - 1:
-      self.start_x = self.cursor_pos - self.display_width
-    return
-
-
-  def check_cursor(self):
-    if self.cursor_pos < 0:
-      self.cursor_pos = 0
-    elif self.cursor_pos > len(self.buff):
-      self.cursor_pos = len(self.buff)
-    self.check_startx()
-    return
-
-
-  def seek_cursor(self, n):
-    self.cursor_pos += n
-    self.check_cursor()
-    return
-
-
-  def set_cursor(self, n):
-    self.cursor_pos = n
-    self.check_cursor()
-    return
-
-
-  def start_shell(self):
-    self.stdscr = curses.initscr()
-    self.stdscr.clear()
-    curses.cbreak()
-    curses.noecho()
-    self.stdscr.keypad(True)
-    return
-
-
-  def stop_shell(self):
-    self.stdscr.keypad(False)
-    curses.echo()
-    curses.nocbreak()
-    curses.endwin()
-    return
-
-
-  def start(self):
-    try:
-      self.sock.connect(self.address)
-    except FileNotFoundError:
-      # The socket for the server does not exist.
-      print('Could not connect to:', self.address)
-      print('Is the server running?')
-      return
-
-    self.start_shell()
-    try:
-      self.update_size()
-      self.logwin = curses.newwin(self.max_y-1,self.max_x, 0,0)
-      self.promptwin = curses.newwin(1, len(self.prompt)+1, self.max_y-1, 0)
-      self.promptwin.addstr(0,0, self.prompt)
-      self.editwin = curses.newpad(1, self.input_pad_len)
-      self.draw_screen()
-      super(Shell, self).start()
-      self.sock.sendall(bytes('shell', 'utf-8'))
-      while True:
-        c = self.stdscr.getch()
-        if c == ascii.EOT:
-          break
-        elif c == curses.KEY_F1:
-          self.stop_shell()
-          import pdb
-          pdb.set_trace()
-        elif c == curses.KEY_RESIZE:
-          self.update_size()
-        elif c == curses.KEY_UP:
-          self.buff = self.history.read_backwards()
-          self.set_cursor(len(self.buff))
-        elif c == curses.KEY_DOWN:
-          self.buff = self.history.read_forward()
-          self.set_cursor(len(self.buff))
-        elif c == curses.KEY_PPAGE:
-          self.seek_read(-int((self.max_y - 1)/2))
-        elif c == curses.KEY_NPAGE:
-          self.seek_read(int((self.max_y - 1)/2))
-        elif c == curses.KEY_LEFT:
-          self.seek_cursor(-1)
-        elif c == curses.KEY_RIGHT:
-          self.seek_cursor(1)
-        elif c == curses.KEY_END:
-          self.set_cursor(len(self.buff))
-        elif c == curses.KEY_HOME:
-          self.set_cursor(0)
-        elif 32 <= c and c <= 126:
-          if len(self.buff) < self.input_pad_len - 1:
-            self.buff = self.buff[:self.cursor_pos] + chr(c)\
-                      + self.buff[self.cursor_pos:]
-            self.seek_cursor(1)
-          else:
-            curses.beep()
-            curses.flash()
-        elif c == ascii.BS or c == ascii.DEL or c == curses.KEY_BACKSPACE:
-          self.buff = self.buff[:self.cursor_pos-1]\
-                    + self.buff[self.cursor_pos:]
-          self.seek_cursor(-1)
-        elif c == ascii.NL or c == ascii.LF or c == curses.KEY_ENTER:
-          self.history.write(self.buff)
-          if self.running:
-            try:
-              self.sock.sendall(bytes(self.buff + '\n', 'utf-8'))
-            except BrokenPipeError:
-              self.stop()
-              self.sock.close()
-          self.buff = ''
-          self.set_cursor(0)
-        else:
-          curses.beep()
-          curses.flash()
-        self.draw_screen()
-    finally:
-      self.stop_shell()
-      self.stop()
-      self.sock.close()
-    return
 
 
 
