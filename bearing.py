@@ -2,11 +2,6 @@
 
 from math import pi, atan
 
-# Places you add here will be referrable by name.
-places = {
-  'origin': (0,0),
-}
-
 def bearing(A,B):
   """
   The bearing needed to travel from A to B in minecraft. Arguments should
