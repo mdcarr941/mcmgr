@@ -8,4 +8,4 @@ MCSERVER = os.path.join(os.environ['HOME'], 'mcservers',
 MEMSTART = '256M'
 MEMMAX = '1G'
 LOGFILE = os.path.join(os.environ['HOME'], 'mcmgr.log')
-LOGLEVEL = logging.DEBUG
+LOGLEVEL = logging.INFO
