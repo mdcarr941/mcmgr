@@ -10,31 +10,13 @@ import json
 import io
 import subprocess
 
-import lineharness
-import bearing
-
-WORLDS_DIR = os.path.join(os.environ['HOME'], 'worlds')
-BACKUPS_DIR = os.path.join(os.environ['HOME'], 'backups')
-MCSERVER = os.path.join(os.environ['HOME'], 'mcservers', 'minecraft_server.jar')
-MEMSTART = '256M'
-MEMMAX = '1G'
-LOGFILE = os.path.join(os.environ['HOME'], 'mcmgr.log')
-
-logger = logging.getLogger('mcmgr')
-
-def configure_logging(level):
-  logger.setLevel(level)
-  f = logging.Formatter(fmt='%(asctime)s:%(levelname)s:%(message)s')
-  h = logging.StreamHandler(stream=sys.stderr)
-  h.setLevel(logging.WARNING)
-  h.setFormatter(f)
-  logger.addHandler(h)
-  h = logging.FileHandler(LOGFILE)
-  h.setLevel(logging.DEBUG)
-  h.setFormatter(f)
-  logger.addHandler(h)
-
-configure_logging(logging.INFO)
+if __name__ != '__main__':
+  from .bearing import bearing
+  from . import lineharness, config, LOGGER
+else:
+  from bearing import bearing
+  from __init__ import LOGGER
+  import lineharness, config
 
 
 
@@ -54,11 +36,11 @@ class MCLineParser(lineharness.LineParser):
         with open(self.places_file, 'r') as fp:
           self.places = json.loads(fp.read())
       except FileNotFoundError as e:
-        logger.error('could not find places.json in cwd: ' + cwd)
-        logger.debug(str(e))
+        LOGGER.info('could not find places.json in cwd: ' + cwd)
+        LOGGER.debug(e, exc_info=1)
       except json.decoder.JSONDecodeError as e:
-        logger.error('problem decoding: ' + cwd + '/places.json')
-        logger.debug(str(e))
+        LOGGER.error('problem decoding: ' + cwd + '/places.json')
+        LOGGER.debug(e, exc_info=1)
     if '__global__' not in self.places:
       self.places['__global__'] = dict()
     return
@@ -118,7 +100,7 @@ to another method."""
 
     tokens = self.tokenize(line)
     if len(tokens) > 0:
-      logger.debug('have tokens: ' + str(tokens))
+      LOGGER.debug('have tokens: ' + str(tokens))
     if len(tokens) < 5:
       return
 
@@ -138,18 +120,18 @@ to another method."""
       meta['player_name'] = 'Server'
       meta['server_flag'] = True
 
-    logger.debug('tokens to be passed on: ' + str(tokens[5:]))
+    LOGGER.debug('tokens to be passed on: ' + str(tokens[5:]))
     if cmd in self.public_methods:
       method = self.__getattribute__(cmd)
       try:
-        logger.debug('calling: ' + cmd)
+        LOGGER.debug('calling: ' + cmd)
         return method(*tokens[5:], **meta).rstrip() + '\n'
       except lineharness.StopLogException as e:
-        logger.debug('StopLog exception raised.')
+        LOGGER.debug('StopLog exception raised.')
         raise e
       except Exception as e:
-        logger.error('Uncaught exception in called method.')
-        logger.debug(str(e))
+        LOGGER.error('Uncaught exception in called method.')
+        LOGGER.debug(e, exc_info=1)
         return None
 
 
@@ -202,8 +184,8 @@ to another method."""
       # self.places_file was not defined in init, not a problem
       pass
     except FileNotFoundError as e:
-      logger.error('Error saving file: ' + self.places_file)
-      logger.debug(e)
+      LOGGER.error('Error saving file: ' + self.places_file)
+      LOGGER.debug(e, exc_info=1)
     return
 
 
@@ -311,7 +293,7 @@ Usage: !display_coords <name1> <name2> ..."""
 can be referred to by name or by their X and Z coordinates. Usage: \
 !bearing <x1 z1|name1> <x2 z2|name2>"""
     try:
-      bearing.bearing((0,0), (0,0))
+      bearing((0,0), (0,0))
     except NameError:
       return
 
@@ -339,7 +321,7 @@ can be referred to by name or by their X and Z coordinates. Usage: \
     if A == None or B == None:
       return self.invalid_args(self.bearing.__doc__)
     else:
-      return self.say(str(round(bearing.bearing(A, B), 2)))
+      return self.say(str(round(bearing(A, B), 2)))
       
 
   def randint(self, *args, **kwargs):
@@ -366,13 +348,13 @@ class MCServer(lineharness.Server):
   # The name of the world the server will host.
   world = ""
   # The jar file to pass to the JVM.
-  mcserver = MCSERVER
+  mcserver = config.MCSERVER
   # The argument sequence to give to Popen.
   cmd = ['java']
   # Starting memory for the JVM.
-  memstart = MEMSTART
+  memstart = config.MEMSTART
   # Maximum memory for the JVM.
-  memmax = MEMMAX
+  memmax = config.MEMMAX
 
 
   def __init__(self, world, cwd=None, address=None, backup_dir=None,
@@ -382,7 +364,7 @@ class MCServer(lineharness.Server):
     self.world = world
 
     if cwd == None:
-      self.cwd = os.path.join(WORLDS_DIR, world)
+      self.cwd = os.path.join(config.WORLDS_DIR, world)
     else:
       self.cwd = cwd
 
@@ -392,7 +374,7 @@ class MCServer(lineharness.Server):
       self.address = address
 
     if backup_dir == None:
-      self.backup_dir = os.path.join(BACKUPS_DIR, world)
+      self.backup_dir = os.path.join(config.BACKUPS_DIR, world)
     else:
       self.backup_dir = backup_dir
 
@@ -404,8 +386,10 @@ class MCServer(lineharness.Server):
 
     if not os.path.isdir(self.cwd):
       raise Exception('Not a directory: ' + self.cwd)
-    if not os.path.isdir(os.path.dirname(self.backup_dir)):
-      raise Exception('Invalid backup directory: ' + self.backup_dir)
+    parent, _ = os.path.split(self.backup_dir)
+    if not os.path.isdir(parent):
+      raise Exception('Invalid backup directory, parent does not exist: '
+                      + self.backup_dir)
     if not os.path.isfile(self.mcserver):
       raise Exception('Not a file: ' + self.mcserver)
 
@@ -447,13 +431,13 @@ class MCServer(lineharness.Server):
         print(err.decode())
       returncode = rdiff.returncode
     except Exception as e:
-      logger.error('an exception occured in backup_client')
-      logger.debug(e)
+      LOGGER.error('an exception occured in backup_client')
+      LOGGER.debug(e, exc_info=1)
     return returncode
 
 
   def backup_server(self, server, connection, *args):
-    logger.debug('backup_server called')
+    LOGGER.debug('backup_server called')
     buf = io.StringIO()
     server.log.write_streams.append(buf)
     try:
@@ -465,21 +449,19 @@ class MCServer(lineharness.Server):
       # This unblocks the client process.
       connection.sendall(b'\x01')
     except Exception as e:
-      logger.error('an exception occured in backup_server')
-      logger.debug(e)
+      LOGGER.error('an exception occured in backup_server')
+      LOGGER.debug(e, exc_info=1)
     finally:
       server.log.write_streams.remove(buf)
       buf.close()
       connection.close()
-      logger.debug('backup_server returning')
+      LOGGER.debug('backup_server returning')
       return
 
 
 
 if __name__ == '__main__':
-  import signal
-
-  usage = 'Usage: '+ sys.argv[0] +' <start|shell> [world]'
+  usage = 'Usage: '+ sys.argv[0] +' <start|shell|backup> [world]'
 
   if len(sys.argv) < 2:
     print(usage)
@@ -509,8 +491,8 @@ if __name__ == '__main__':
       sys.exit(server.backup_client())
     else:
       returncode = 0
-      for world in os.listdir(path=WORLDS_DIR):
-        path = os.path.join(WORLDS_DIR, world)
+      for world in os.listdir(path=config.WORLDS_DIR):
+        path = os.path.join(config.WORLDS_DIR, world)
         if os.path.isdir(path):
           server = MCServer(world)
           if server.backup_client() != 0:
