@@ -444,7 +444,7 @@ class MCServer(lineharness.Server):
       backup_log = lineharness.Log(read_stream=buf,
                                    line_parser=BackupLineParser())
       backup_log.start()
-      server.sub.stdin.write('save-all flush\n')
+      server.sub.stdin.write('save-all\n')
       backup_log.join()
       # This unblocks the client process.
       connection.sendall(b'\x01')
