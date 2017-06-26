@@ -407,8 +407,6 @@ class MCServer(lineharness.Server):
 
 
   def backup_client(self):
-    returncode = -1
-
     try:
       self.sock.connect(self.address)
       self.sock.sendall(bytes('backup', 'utf-8'))
@@ -420,10 +418,11 @@ class MCServer(lineharness.Server):
       # The server isn't running, just do the backup.
       pass
 
+    returncode = -1
     try:
-      cmd = ['rdiff-backup', self.cwd, self.backup_dir]
+      backup_cmd = ['rdiff-backup', '-b', self.cwd, self.backup_dir]
       print('backing up "%s" to "%s"' % (self.cwd, self.backup_dir))
-      rdiff = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+      rdiff = subprocess.Popen(backup_cmd, stdout=subprocess.PIPE)
       out, err = rdiff.communicate()
       if type(out) == type(bytes()):
         print(out.decode())
