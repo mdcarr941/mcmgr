@@ -358,7 +358,7 @@ class MCServer(lineharness.Server):
 
 
   def __init__(self, world, cwd=None, address=None, backup_dir=None,
-               line_parser=None, **kwargs):
+               line_parser=None, world_config_file='mcmgr.json', **kwargs):
     if type(world) != type(str()):
       raise TypeError('Expected a string argument.')
     self.world = world
@@ -367,6 +367,29 @@ class MCServer(lineharness.Server):
       self.cwd = os.path.join(config.WORLDS_DIR, world)
     else:
       self.cwd = cwd
+
+    if not os.path.isdir(self.cwd):
+      raise Exception('Not a directory: ' + self.cwd)
+
+    if line_parser == None:
+      line_parser = MCLineParser(cwd=self.cwd)
+
+    super(MCServer, self).__init__(name=self.world, line_parser=line_parser,
+                                   **kwargs)
+
+    # Load the per-world configuration, if it is present.
+    world_config_path = os.path.join(self.cwd, world_config_file)
+    if os.path.isfile(world_config_path):
+      with open(world_config_path) as fp:
+        world_config = json.loads(fp.read())
+      if 'mcserver' in world_config:
+        self.mcserver = os.path.expanduser(world_config['mcserver'])
+      if 'cmd' in world_config:
+        self.cmd = world_config['cmd']
+      if 'memstart' in world_config:
+        self.memstart = world_config['memstart']
+      if 'memmax' in world_config:
+        self.memmax = world_config['memmax']
 
     if address == None:
       self.address = os.path.join(self.cwd, self.world + '.sock') 
@@ -378,20 +401,15 @@ class MCServer(lineharness.Server):
     else:
       self.backup_dir = backup_dir
 
-    if line_parser == None:
-      line_parser = MCLineParser(cwd=self.cwd)
-
-    super(MCServer, self).__init__(name=self.world, line_parser=line_parser,
-                                   **kwargs)
-
-    if not os.path.isdir(self.cwd):
-      raise Exception('Not a directory: ' + self.cwd)
     parent, _ = os.path.split(self.backup_dir)
     if not os.path.isdir(parent):
       raise Exception('Invalid backup directory, parent does not exist: '
                       + self.backup_dir)
+
+    if not os.path.isabs(self.mcserver):
+      self.mcserver = os.path.join(config.MCSERVER_DIR, self.mcserver)
     if not os.path.isfile(self.mcserver):
-      raise Exception('Not a file: ' + self.mcserver)
+      raise Exception('mcserver is not a file: ' + self.mcserver)
 
     if type(self.cmd) == type(str()):
       self.cmd = [self.cmd]

@@ -1,0 +1,14 @@
+mcmgr new features:
+  per-world as well as global configuration files
+  better backup support, i.e. list snapshots and provide the ability
+    to restore them
+  run the server _safely_ from a ramdisk
+  create new servers
+  restart server from command line
+  status command which shows info about a server, i.e. whether
+    it's running, who's playing, etc.
+  add hook for timed events and move backup logic from the
+    systemd timer into the script
+  update server jar
+  webinterface that exposes most or all of the programs features and in
+    particular gives a timeline of who was playing and when

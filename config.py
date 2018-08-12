@@ -3,9 +3,10 @@ import os
 
 WORLDS_DIR = os.path.join(os.environ['HOME'], 'worlds')
 BACKUPS_DIR = os.path.join(os.environ['HOME'], 'backups')
-MCSERVER = os.path.join(os.environ['HOME'], 'mcservers',
-                        'minecraft_server.1.12.jar')
-MEMSTART = '256M'
-MEMMAX = '1G'
+MCSERVER_DIR = os.path.join(os.environ['HOME'], 'mcservers')
+MCSERVER = os.path.join(MCSERVER_DIR, 'minecraft_server.jar')
+MEMSTART = '512M'
+MEMMAX = '2G'
 LOGFILE = os.path.join(os.environ['HOME'], 'mcmgr.log')
 LOGLEVEL = logging.INFO
+#LOGLEVEL = logging.DEBUG
